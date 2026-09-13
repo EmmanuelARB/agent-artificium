@@ -153,7 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
 
     run = commands.add_parser("run", help="Run the life-loop daemon")
-    run.add_argument("--once", action="store_true")
+    run.add_argument("--once", action="store_true", help="Run one bounded turn using the configured round/time budget; continuous mode has no turn budget")
     run.add_argument("--verbose", action="store_true")
     run.add_argument("--quiet", action="store_true")
 

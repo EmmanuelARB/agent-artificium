@@ -163,7 +163,7 @@ The `revise_self` tool uses two stages: request reflection, then confirm a compl
 <details>
 <summary><strong>5. A continuous life-loop</strong></summary>
 
-The life-loop gives the agent opportunities to act on startup, incoming events, unfinished work, and an optional awake heartbeat. The default heartbeat is 30 seconds. A turn can contain multiple inferences and tool calls; reaching a turn limit can queue a continuation.
+The life-loop gives the agent opportunities to act on startup, incoming events, unfinished work, and an optional awake heartbeat. The default heartbeat is 30 seconds. Continuous work can span any number of inferences and tool calls, without a round-count or elapsed-time turn limit.
 
 When no message needs attention, Self supplies direction. The agent can continue a project, investigate, build a tool, organize memory, or sleep. The sleep tool requests reflection before sleeping until an event or a timer wakes it.
 
@@ -495,7 +495,7 @@ Run these commands from the project folder as `python3 artificium.py COMMAND`. A
 | `setup` | Connect the model and initialize the instance; `--no-launch` finishes without opening the launcher. |
 | `chat` | Start or reuse the background agent and open a terminal interaction client. |
 | `start` / `stop` / `restart` | Manage the background life-loop; restart applies saved configuration. |
-| `run` / `run --once` | Run in the foreground, or execute one turn that can include multiple inferences and tool calls. |
+| `run` / `run --once` | Run continuously in the foreground, or perform a bounded amount of work and return. |
 | `watch` | Follow the life-loop trace without starting the agent. |
 | `status` / `status --json` | Read-only process, context, event, vision, and offload status. |
 | `send` / `show` | Publish an interaction event or inspect an interaction's events. |
@@ -507,6 +507,10 @@ Run these commands from the project folder as `python3 artificium.py COMMAND`. A
 | `doctor` / `check` | Inspect request mapping and metadata, or test the complete connection. `doctor --live` equals `check`. |
 | `key` | Verify and save a replacement API key. |
 | `logs` | Recent trace entries; `--lifetime`, `--feature NAME`, and `--summary` select other views. |
+
+Continuous `run` and background `start` have no turn-count or turn-duration limit. Model actions continue across inference requests, with incoming events, stop requests, and API-key changes checked between rounds. Working-memory offloading, sleep, and error handling retain their own behavior.
+
+Only `run --once` uses the saved `harness.max_life_loop_rounds` and `harness.max_turn_seconds` budgets (defaults: 64 rounds and 900 seconds). The time budget is checked between rounds; it does not interrupt inference. Reaching either budget returns to the operator with working context preserved and adds no turn-limit notification. Model-request and shell timeouts are separate settings.
 
 Aliases: `init` for `setup`, `reconfigure` for `configure`, and `stream` for `attention`. `send`, `notify`, and `attention` queue input without starting the process. Closing chat or watch leaves a background agent running. In foreground `run`, the first Ctrl-C requests shutdown; the second forces exit. Use `stop` when you want the background life-loop to end.
 
@@ -550,7 +554,7 @@ python3 artificium.py watch
 
 Initial setup also accepts `--self-file /path/to/self.txt` or `--self "TEXT"`. Self is mutable, so a standing purpose is guidance the agent can revise, not an immutable enforcement policy. No open chat is required for continued work.
 
-Per-turn limits default to 64 inference rounds and 900 seconds; reaching a limit can queue a continuation. These are turn boundaries, not a lifetime budget or a guarantee of timely interruption. Repeated identical no-action output triggers backoff, and engine failures also back off. Use provider spending controls and runtime status to manage an unattended experiment.
+Continuous operation has no lifetime work budget. Repeated identical no-action output triggers backoff, and engine failures retain their recovery and pause behavior. Use provider spending controls and runtime status to manage an unattended experiment.
 
 </details>
 
