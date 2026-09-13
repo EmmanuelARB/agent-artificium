@@ -599,7 +599,8 @@ class RevolutionCase(unittest.TestCase):
         clock = [100.0]
         attempts: list[tuple[float, str]] = []
 
-        def turn(*, trigger: str) -> str:
+        def turn(*, trigger: str, continuous: bool) -> str:
+            self.assertTrue(continuous)
             attempts.append((clock[0], trigger))
             if len(attempts) == 1:
                 raise EngineError("overloaded", status=503)

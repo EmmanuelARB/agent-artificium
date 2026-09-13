@@ -172,6 +172,8 @@ class Config:
     repetition_penalty: float | None = None
     seed: int | None = None
     stop_sequences: list[str] = field(default_factory=list)
+    # Budgets for run --once / bounded run_turn calls only; continuous mode
+    # ignores these legacy setting names and does not emit turn-limit notices.
     max_life_loop_rounds: int = 64
     max_turn_seconds: float = 900.0
     shell_timeout_seconds: float = 120.0

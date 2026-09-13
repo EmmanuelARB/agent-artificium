@@ -8,6 +8,10 @@ exact commands or building a client, because documentation can change.
 Process lifecycle
 
 - `python3 artificium.py start` starts the life-loop in the background.
+- Continuous `run` / `start` follows model actions without a round-count or
+  elapsed-time turn limit. `run --once` uses the configured one-off work budget.
+  Reaching that one-off budget preserves working context without adding a
+  turn-limit notification or scheduling more work.
 - `python3 artificium.py status` reports a verified `process.alive` value and PID
   alongside context, memory, attention, interaction, scheduler, and sleep state.
 - `python3 artificium.py watch` follows the durable life-loop trace. Ctrl-C stops

@@ -999,22 +999,33 @@ class Artificium:
         )
         return repeats, repeats >= 3
 
-    def run_turn(self, *, trigger: str = "manual") -> str:
-        self._refresh_key()
+    def run_turn(self, *, trigger: str = "manual", continuous: bool = False) -> str:
+        """Work until sleep, no further action, error, or an operator stop.
+
+        Only one-off calls use the configured round/time budget. Continuous
+        execution keeps the same working context without synthetic turn wakes.
+        """
         turn_id = sortable_id("turn_")
         self.records.emit("turn_started", turn_id=turn_id, trigger=trigger)
         self.records.life("turn_started", turn_id=turn_id, trigger=trigger)
         pulse_used = False
         first_wake_issued = False
         meta_memory_guidance_issued = False
+        guided_meta_memory: str | None = None
         last_visible = ""
         started = time.monotonic()
-        continuation_reason: str | None = None
+        round_number = 0
 
-        for round_number in range(1, self.config.max_life_loop_rounds + 1):
-            if time.monotonic() - started > self.config.max_turn_seconds:
-                continuation_reason = "turn time limit"
+        while not self._stop:
+            if not continuous and (
+                round_number >= self.config.max_life_loop_rounds
+                or time.monotonic() - started > self.config.max_turn_seconds
+            ):
                 break
+            round_number += 1
+            self._refresh_key()
+            if continuous:
+                self._write_state("running", turn_id=turn_id, round=round_number)
             claimed = self._claim_notifications()
             inputs = self._render_notifications(claimed)
             recovery = self._pending_recovery()
@@ -1027,11 +1038,15 @@ class Artificium:
                     metadata=recovery,
                 )))
             inputs.extend(self._context_events())
-            if not meta_memory_guidance_issued:
+            # Recheck the memory map when it changes, without needing a timed
+            # turn boundary or repeating guidance for an unchanged map.
+            meta_memory = self._read_full(self.paths.meta_memory) if continuous else None
+            if not meta_memory_guidance_issued or (continuous and meta_memory != guided_meta_memory):
                 guidance = self._meta_memory_guidance(turn_id=turn_id)
                 if guidance:
                     inputs.append(guidance)
                     meta_memory_guidance_issued = True
+                guided_meta_memory = meta_memory
             if self.initialization.pending() and not first_wake_issued:
                 inputs.append(self.prompts.event("first_wake"))
                 first_wake_issued = True
@@ -1317,7 +1332,7 @@ class Artificium:
 
             if mandatory_offload:
                 # A plain response cannot satisfy the requirement or enter normal
-                # sleep/backoff. Existing round/time limits still bound this turn.
+                # sleep/backoff. The operator can still stop between rounds.
                 continue
             repeats, forced_backoff = self._observe_no_action(reply.content)
             pending = self.interactions.pending_events(limit=20)
@@ -1365,16 +1380,6 @@ class Artificium:
                     "sleep", f"repeated no-action output; backing off for {seconds:g}s"
                 )
             break
-        else:
-            continuation_reason = "life-loop round limit"
-
-        if continuation_reason and not self._sleep_active() and not self.notifications.has_new():
-            self.notifications.create(
-                type="external_event",
-                source="artificium_runtime",
-                summary=f"The prior turn reached its {continuation_reason}; resume from working context.",
-                metadata={"turn_id": turn_id, "reason": continuation_reason},
-            )
         self.records.emit("turn_completed", turn_id=turn_id, visible=last_visible)
         self.records.life("turn_completed", turn_id=turn_id)
         self._write_state("idle", last_turn_id=turn_id)
@@ -1613,7 +1618,7 @@ class Artificium:
                     )
                     initial_pulse = False
                     try:
-                        self.run_turn(trigger=trigger)
+                        self.run_turn(trigger=trigger, continuous=True)
                         error_repeats = 0
                     except Exception as exc:
                         error_repeats += 1
