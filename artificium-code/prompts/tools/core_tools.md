@@ -338,4 +338,4 @@ is complete, not immediately and not ceremonially.
 `mode` is `until_event` or `timed`. This is two-stage: the first call issues one
 pre-sleep reflection; after resolving it, repeat with
 `reflection_complete:true`. New interaction events interrupt sleep. A timed
-sleep cannot be shorter than the owner-configured wake interval.
+sleep cannot be shorter than the runtime polling interval (one second by default).

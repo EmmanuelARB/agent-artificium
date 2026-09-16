@@ -26,7 +26,7 @@ Process lifecycle
 Configuration and diagnosis
 
 - `config` prints non-secret configuration; `configure` changes provider/model,
-  endpoint, heartbeat, model context window, or native image mode without
+  endpoint, model context window, or native image mode without
   modifying Self or memory. Restart a running process after configuration.
 - Model settings → Request timeout accepts seconds or `off` (the default).
   This controls waiting for inference, including reasoning. Shell commands have

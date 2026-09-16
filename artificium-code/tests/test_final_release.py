@@ -150,23 +150,36 @@ class FinalReleaseCase(unittest.TestCase):
         ConfigStore(self.paths).save(loaded)
         grouped = read_json(self.paths.config)
         self.assertEqual(set(grouped), {'schema_version','harness','model'})
-        self.assertEqual(grouped['harness']['heartbeat_seconds'], None)
+        self.assertNotIn('heartbeat_seconds', grouped['harness'])
         self.assertEqual(grouped['model']['top_k'], 17)
         self.assertEqual(ConfigStore(self.paths).load(), loaded)
+
+    def test_grouped_config_ignores_retired_heartbeat_values(self):
+        for value in (None, 30, 3600):
+            with self.subTest(heartbeat=value):
+                grouped = self.config.grouped_dict()
+                grouped['harness']['heartbeat_seconds'] = value
+                atomic_write_json(self.paths.config, grouped)
+                before = self.paths.config.read_bytes()
+                loaded = ConfigStore(self.paths).load()
+                self.assertEqual(loaded, self.config)
+                self.assertEqual(self.paths.config.read_bytes(), before)
+                ConfigStore(self.paths).save(loaded)
+                self.assertNotIn('heartbeat_seconds', read_json(self.paths.config)['harness'])
 
     def test_harness_command_works_offline_without_changing_connection(self):
         before = ConfigStore(self.paths).load().grouped_dict()['model']
         with mock.patch('artificium.setup.discover_provider_models',side_effect=AssertionError('must not probe')), redirect_stdout(io.StringIO()):
-            result = main(['--root',str(self.paths.root),'configure','harness','--heartbeat','off',
+            result = main(['--root',str(self.paths.root),'configure','harness',
                            '--mandatory-offload','on','--offload-threshold','75'])
         self.assertEqual(result, 0)
         loaded = ConfigStore(self.paths).load()
         self.assertEqual(loaded.grouped_dict()['model'], before)
-        self.assertEqual((loaded.heartbeat_seconds,loaded.mandatory_offload,loaded.offload_threshold_percent),(None,True,75))
+        self.assertEqual((loaded.mandatory_offload,loaded.offload_threshold_percent),(True,75))
 
     def test_switching_models_preserves_harness_preferences_and_refreshes_vision(self):
         initial = self.agent(vision='no',vision_preference='auto',model_supports_vision=False,
-                             heartbeat_seconds=None,mandatory_offload=True,offload_threshold_percent=72).config
+                             mandatory_offload=True,offload_threshold_percent=72).config
         discovery = ModelDiscovery(models=('new',),details={'new':{'context_length':64000,'vision':True}})
         with mock.patch('artificium.setup.discover_provider_models',return_value=discovery):
             updated = SetupWizard(self.paths).reconfigure(SetupOptions(scope='model',model='new'))
@@ -189,33 +202,31 @@ class FinalReleaseCase(unittest.TestCase):
 
     def test_legacy_combined_cli_flags_and_grouped_config_display(self):
         with redirect_stdout(io.StringIO()):
-            result = main(['--root',str(self.paths.root),'configure','--heartbeat','off','--mandatory-offload','on'])
+            result = main(['--root',str(self.paths.root),'configure','--mandatory-offload','on'])
         self.assertEqual(result,0)
-        self.assertIsNone(ConfigStore(self.paths).load().heartbeat_seconds)
         output = io.StringIO()
         with redirect_stdout(output):
             self.assertEqual(main(['--root',str(self.paths.root),'config','harness']),0)
         self.assertTrue(json.loads(output.getvalue())['mandatory_offload'])
 
     def test_interactive_harness_edit_needs_no_model_or_provider_prompts(self):
-        with mock.patch('builtins.input', side_effect=['off','no','same','y','70','n','y']), redirect_stdout(io.StringIO()), \
+        with mock.patch('builtins.input', side_effect=['no','same','y','70','n','y']), redirect_stdout(io.StringIO()), \
              mock.patch('artificium.setup.discover_provider_models',side_effect=AssertionError('must not probe')):
             updated = SetupWizard(self.paths).reconfigure(SetupOptions(scope='harness'),interactive=True)
-        self.assertEqual((updated.heartbeat_seconds,updated.vision,updated.offload_threshold_percent),(None,'no',70))
+        self.assertEqual((updated.vision,updated.offload_threshold_percent),('no',70))
 
     def test_interactive_setup_asks_harness_before_provider_and_keeps_defaults(self):
         self.paths.config.unlink()
-        responses = iter(['','','same','n','n','custom','http://localhost:8000','local','50000','','n','y'])
+        responses = iter(['','same','n','n','custom','http://localhost:8000','local','50000','','n','y'])
         prompts = []
         def answer(prompt):
             prompts.append(prompt)
             return next(responses)
         with mock.patch('builtins.input',side_effect=answer),redirect_stdout(io.StringIO()), mock.patch('artificium.setup.discover_provider_models',return_value=ModelDiscovery()):
             SetupWizard(self.paths).run(SetupOptions(),interactive=True)
-        self.assertIn('Heartbeat',prompts[0])
-        self.assertIn('Vision',prompts[1])
-        self.assertIn('Working-memory',prompts[2])
-        self.assertIn('offloading',prompts[3])
+        self.assertIn('Vision',prompts[0])
+        self.assertIn('Working-memory',prompts[1])
+        self.assertIn('offloading',prompts[2])
         config = ConfigStore(self.paths).load()
         self.assertFalse(config.mandatory_offload)
         self.assertEqual(config.offload_threshold_percent,80)

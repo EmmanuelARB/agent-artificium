@@ -140,7 +140,6 @@ class Config:
     base_url: str = ""
     endpoint: str = "chat/completions"
     adapter: str = "openai_compatible"
-    heartbeat_seconds: float | None = 30.0
     wake_on_interaction: bool = True
     poll_seconds: float = 1.0
     context_window_tokens: int = 100_000
@@ -262,8 +261,6 @@ class Config:
             <= self.broad_chunk_fraction
         ):
             raise ValueError("chunk fractions must be granular <= balanced <= broad")
-        if self.heartbeat_seconds is not None and self.heartbeat_seconds <= 0:
-            raise ValueError("heartbeat_seconds must be positive or null")
         if self.poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
         if self.engine_wait_notice_seconds <= 0:
@@ -408,7 +405,7 @@ class Config:
         values.pop("schema_version", None)
         values["request_timeout_seconds"] = self.request_timeout_seconds
         # Always show the small set of operator-facing harness policies.
-        for name in ("heartbeat_seconds", "vision_preference", "mandatory_offload", "offload_threshold_percent", "working_memory_tokens", "auto_repair"):
+        for name in ("vision_preference", "mandatory_offload", "offload_threshold_percent", "working_memory_tokens", "auto_repair"):
             values[name] = getattr(self, name)
         return {
             "schema_version": 3,

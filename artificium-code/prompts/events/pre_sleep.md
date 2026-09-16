@@ -24,4 +24,4 @@ matters and sleep. If a valuable action is clear, perform it; otherwise request
 sleep again. Do not repeat this checklist in external communications.
 
 New events may wake you immediately. A requested timed sleep must respect the
-configured minimum wake interval; pending events may interrupt it.
+runtime polling interval (one second by default); pending events may interrupt it.

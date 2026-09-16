@@ -275,7 +275,7 @@ class ConnectionFlowCase(unittest.TestCase):
             return ""
         with mock.patch("builtins.input", side_effect=answer):
             SetupWizard(self.paths).run(self.options(), interactive=True)
-        self.assertEqual(sum(p.startswith("Heartbeat") for p in prompts), 1)
+        self.assertEqual(sum(p.startswith("Vision") for p in prompts), 1)
         self.assertEqual(sum(p.startswith("Context capacity") for p in prompts), 0)
         self.assertEqual(ConfigStore(self.paths).load().context_window_tokens, 32768)
 
@@ -317,7 +317,7 @@ class ConnectionFlowCase(unittest.TestCase):
         with mock.patch("builtins.input", side_effect=answer):
             SetupWizard(self.paths).run(self.options(temperature=2), interactive=True)
         self.assertIsNone(ConfigStore(self.paths).load().temperature)
-        self.assertEqual(sum(p.startswith("Heartbeat") for p in prompts), 1)
+        self.assertEqual(sum(p.startswith("Vision") for p in prompts), 1)
         self.assertEqual(len(self.inference_requests()), 2)
 
     def test_explicit_new_key_is_not_saved_when_inference_rejects_it(self):

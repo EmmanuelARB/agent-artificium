@@ -45,15 +45,6 @@ from .setup import (
 )
 
 
-def _heartbeat(value: str) -> float | None:
-    if value.lower() in {"off", "none", "0"}:
-        return None
-    number = float(value)
-    if number <= 0:
-        raise argparse.ArgumentTypeError("heartbeat must be positive or off")
-    return number
-
-
 def _generation_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reasoning", choices=["auto", "off", "on", "minimal", "low", "medium", "high", "xhigh", "max"],
                         help="Reasoning control; auto clears overrides, off disables it when supported")
@@ -83,7 +74,6 @@ def _generation_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _harness_arguments(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("harness settings")
-    group.add_argument("--heartbeat", type=_heartbeat, default=argparse.SUPPRESS)
     group.add_argument("--vision", choices=["auto", "yes", "no"], help="Image preference; checked against model capability")
     group.add_argument("--mandatory-offload", choices=["on", "off"], help="Require memory offloading at the threshold (default: off)")
     group.add_argument("--offload-threshold", type=float, help="Working-memory percentage, 1–95 (default: 80)")
@@ -250,8 +240,6 @@ def _setup_options(args: argparse.Namespace) -> SetupOptions:
         openrouter_provider=getattr(args, "openrouter_provider", None),
         self_directive=getattr(args, "self_directive", None),
         self_file=getattr(args, "self_file", None),
-        heartbeat_seconds=getattr(args, "heartbeat", None),
-        heartbeat_supplied=hasattr(args, "heartbeat"),
         context_window_tokens=getattr(args, "context_window", None),
         request_timeout_seconds=getattr(args, "request_timeout", None),
         reasoning=getattr(args, "reasoning", None),
@@ -366,7 +354,7 @@ def _has_reconfigure_values(args: argparse.Namespace) -> bool:
             "working_memory_tokens",
             "auto_repair",
         )
-    ) or hasattr(args, "heartbeat") or bool(
+    ) or bool(
         getattr(args, "reset_generation_settings", False)
     )
 

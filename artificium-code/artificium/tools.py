@@ -1177,7 +1177,7 @@ class ToolRegistry:
         if mode == "timed":
             if seconds is None:
                 raise ValueError("seconds is required for timed sleep")
-            minimum = self.config.heartbeat_seconds or self.config.poll_seconds
+            minimum = self.config.poll_seconds
             if float(seconds) < minimum:
                 raise ValueError(f"sleep cannot be shorter than the configured interval ({minimum}s)")
         state = self._control()
