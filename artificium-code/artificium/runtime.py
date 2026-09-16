@@ -1050,14 +1050,18 @@ class Artificium:
             if self.initialization.pending() and not first_wake_issued:
                 inputs.append(self.prompts.event("first_wake"))
                 first_wake_issued = True
-            if not inputs and not pulse_used:
+            if not inputs and not pulse_used and (trigger != "continuation" or round_number == 1):
                 inputs.append(
                     self.prompts.event(
                         "external_event",
-                        event_type="life_loop_wake",
+                        event_type="life_loop_continuation" if trigger == "continuation" else "life_loop_wake",
                         created_at=utc_now(),
                         source="artificium_runtime",
-                        summary=f"The life-loop was triggered by {trigger}.",
+                        summary=(
+                            "The previous generation finished without tool calls or an explicit sleep."
+                            if trigger == "continuation"
+                            else f"The life-loop was triggered by {trigger}."
+                        ),
                         path_or_none="none",
                         metadata_or_none={"trigger": trigger},
                     )
@@ -1358,10 +1362,7 @@ class Artificium:
                 )
                 continue
             if forced_backoff:
-                seconds = max(
-                    self.config.heartbeat_seconds or self.config.engine_error_backoff_seconds,
-                    self.config.engine_error_backoff_seconds,
-                )
+                seconds = self.config.engine_error_backoff_seconds
                 atomic_write_json(
                     self.paths.sleep_state,
                     {
@@ -1558,7 +1559,6 @@ class Artificium:
                 "Ctrl-C requests a graceful foreground stop"
             ),
         )
-        next_heartbeat = time.monotonic()
         initial_pulse = True
         error_repeats = 0
         scheduler_stop = threading.Event()
@@ -1598,15 +1598,10 @@ class Artificium:
                     if self._sleep_active():
                         time.sleep(self.config.poll_seconds)
                         continue
-                    now = time.monotonic()
                     event_ready = self.notifications.has_new()
                     retry_ready = self._pending_recovery() is not None
-                    heartbeat_ready = (
-                        self.config.heartbeat_seconds is not None and now >= next_heartbeat
-                    )
-                    if not initial_pulse and not event_ready and not heartbeat_ready and not retry_ready:
-                        time.sleep(self.config.poll_seconds)
-                        continue
+                    # An awake run only returns after a response with no tools.
+                    # Continue immediately; sleep, stop and error guards still apply.
                     trigger = (
                         "startup"
                         if initial_pulse
@@ -1614,7 +1609,7 @@ class Artificium:
                         if retry_ready
                         else "notification"
                         if event_ready
-                        else "heartbeat"
+                        else "continuation"
                     )
                     initial_pulse = False
                     try:
@@ -1630,8 +1625,6 @@ class Artificium:
                         if not isinstance(exc, EngineError):
                             self.console.error(f"{type(exc).__name__}: {exc}")
                         self._error_sleep(exc, error_repeats)
-                    if self.config.heartbeat_seconds is not None:
-                        next_heartbeat = time.monotonic() + self.config.heartbeat_seconds
                 self._write_state("stopped")
                 self.console.line("shutdown", "life-loop stopped")
         finally:

@@ -30,7 +30,7 @@ Extract the complete source archive. From the extracted project folder, run:
 python3 artificium.py
 ```
 
-The wizard asks for harness preferences—heartbeat, vision, working-memory target, and optional recovery—then your model service, address or key, and model. It detects context capacity where possible and uses server defaults for reasoning and sampling unless you customize them. Choose terminal chat after setup.
+The wizard asks for harness preferences—vision, working-memory target, and optional recovery—then your model service, address or key, and model. It detects context capacity where possible and uses server defaults for reasoning and sampling unless you customize them. Choose terminal chat after setup.
 
 Setup verifies the connection with real, potentially billable model requests before saving. It checks the full harness prompt and image input where applicable, without executing tools or retaining the diagnostic response.
 
@@ -163,7 +163,7 @@ The `revise_self` tool uses two stages: request reflection, then confirm a compl
 <details>
 <summary><strong>5. A continuous life-loop</strong></summary>
 
-The life-loop gives the agent opportunities to act on startup, incoming events, unfinished work, and an optional awake heartbeat. The default heartbeat is 30 seconds. Continuous work can span any number of inferences and tool calls, without a round-count or elapsed-time turn limit.
+The life-loop gives the agent opportunities to act on startup, incoming events, and unfinished work. During continuous operation, a completed generation with no tool calls automatically continues unless the agent is sleeping or the runtime is stopped or paused for error handling. Continuation has no interval or off switch and never interrupts generation or tool execution. Continuous work can span any number of inferences and tool calls, without a round-count or elapsed-time turn limit.
 
 When no message needs attention, Self supplies direction. The agent can continue a project, investigate, build a tool, organize memory, or sleep. The sleep tool requests reflection before sleeping until an event or a timer wakes it.
 
@@ -400,12 +400,14 @@ python3 artificium.py configure model --custom-contract none --url http://localh
 </details>
 
 <details>
-<summary><strong>Configuration: heartbeat, context, offloading, vision, and generation controls</strong></summary>
+<summary><strong>Configuration: context, offloading, vision, and generation controls</strong></summary>
 
 Settings live in an atomically saved `artificium-code/config.json`, with separate `harness` and `model` objects. Inspect them with `config`, `config harness`, or `config model`. Edit harness preferences offline with `configure harness`; use `connect` or `configure model` for a verified model change. Configuration changes normally require `restart`; API-key replacement reloads automatically.
 
+Automatic continuation replaces the heartbeat setting. Older `heartbeat_seconds` config values are ignored and removed on the next save; the `--heartbeat` flag is no longer accepted.
+
 ```bash
-python3 artificium.py configure harness --heartbeat 30 --vision auto
+python3 artificium.py configure harness --vision auto
 python3 artificium.py configure harness --mandatory-offload on --offload-threshold 80
 python3 artificium.py configure harness --working-memory-tokens 100000 --auto-repair on
 python3 artificium.py connect --reasoning auto
@@ -414,7 +416,6 @@ python3 artificium.py restart
 
 | Setting | Meaning |
 |---|---|
-| `--heartbeat SECONDS` | Opportunity for another turn while awake; default 30 seconds. `off` disables heartbeat, without cancelling startup, pending events, or ongoing work. |
 | `--vision auto`, `yes`, or `no` | Image preference, reconciled with discovered and tested model capabilities. |
 | `--mandatory-offload on` or `off` | Require a successful offload at the configured context threshold; **off by default**. |
 | `--offload-threshold PERCENT` | Working-memory threshold, from 1–95%; default 80%. |

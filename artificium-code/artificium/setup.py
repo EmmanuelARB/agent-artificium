@@ -46,8 +46,6 @@ class SetupOptions:
     openrouter_provider: str | None = None
     self_directive: str | None = None
     self_file: str | None = None
-    heartbeat_seconds: float | None = 30.0
-    heartbeat_supplied: bool = False
     context_window_tokens: int | None = None
     context_window_source: str | None = None
     # None leaves the saved setting alone; "off" explicitly disables it.
@@ -630,8 +628,6 @@ class SetupWizard:
     @staticmethod
     def _harness_values(options: SetupOptions, current: Config | None) -> dict[str, object]:
         values: dict[str, object] = {}
-        if options.heartbeat_supplied:
-            values["heartbeat_seconds"] = options.heartbeat_seconds
         for name in ("mandatory_offload", "offload_threshold_percent", "auto_repair"):
             value = getattr(options, name)
             if value is not None:
@@ -646,20 +642,6 @@ class SetupWizard:
     @staticmethod
     def _edit_harness(options: SetupOptions, current: Config | None = None) -> None:
         print("\nHarness settings")
-        if not options.heartbeat_supplied:
-            interval = current.heartbeat_seconds if current else 30
-            print("Heartbeat lets Artificium take initiative between messages. Off means it waits for events.")
-            while True:
-                value = _ask("Heartbeat seconds, or off", "off" if interval is None else str(interval))
-                try:
-                    number = None if value.lower() in {"off", "none", "0"} else float(value)
-                    if number is not None and not number > 0:
-                        raise ValueError
-                    options.heartbeat_seconds = number
-                    break
-                except ValueError:
-                    print("Enter a positive number of seconds, or off.")
-            options.heartbeat_supplied = True
         if options.vision is None:
             options.vision = _choice("Vision (auto detects image support; yes requires it; no disables it)", ["auto", "yes", "no"], current.vision_preference if current else "auto")
         if options.working_memory_tokens is None:
@@ -679,10 +661,10 @@ class SetupWizard:
 
     @staticmethod
     def _validate_scope(options: SetupOptions) -> None:
-        if options.scope == "model" and (options.heartbeat_supplied or any(
+        if options.scope == "model" and any(
             getattr(options, name) is not None for name in ("vision", "mandatory_offload", "offload_threshold_percent", "working_memory_tokens", "auto_repair")
-        )):
-            raise ValueError("Use configure harness for heartbeat, vision, and offloading settings")
+        ):
+            raise ValueError("Use configure harness for vision and offloading settings")
         if options.scope == "harness" and (options.reset_generation_settings or any(
             getattr(options, name) is not None for name in (
                 "provider", "model", "api_url", "api_key", "api_key_file", "endpoint", "adapter",
@@ -979,6 +961,6 @@ class SetupWizard:
         self._save_connection(updated, key, options, current)
         Records(self.paths).emit("configuration_updated", provider=updated.provider, model=updated.model,
                                 context_window_tokens=updated.context_window_tokens,
-                                heartbeat_seconds=updated.heartbeat_seconds, vision=updated.vision,
+                                vision=updated.vision,
                                 connection_check=self.last_check)
         return updated

@@ -46,7 +46,7 @@ class ContinuousLoopCase(unittest.TestCase):
 
     def agent(self, respond, **settings):
         defaults = dict(provider="custom", model="test", base_url="http://example.invalid/v1", context_window_tokens=500_000,
-                        heartbeat_seconds=None, mandatory_offload=False)
+                        mandatory_offload=False)
         ConfigStore(self.paths).save(Config(**(defaults | settings)))
         engine = RecordingEngine(respond)
         agent = Artificium(self.paths, engine=engine, console=Console(quiet=True))
@@ -121,6 +121,82 @@ class ContinuousLoopCase(unittest.TestCase):
         self.assertEqual(len(engine.requests), 1)
         self.assertIn("KEEP_THIS_RESEARCH_CONTEXT", self.paths.working_context.read_text())
         self.assertEqual(read_json(self.paths.runtime_state)["status"], "stopped")
+
+    def test_text_only_responses_continue_immediately_with_context(self):
+        def respond(number, messages):
+            if number <= 2:
+                return f"<think>REASONING_STEP_{number}</think>"
+            return call("read_file", path="mind/self.txt")
+
+        agent, engine = self.agent(respond)
+        self.stop_after_tools(agent, 2)
+        with mock.patch("artificium.runtime.time.sleep", side_effect=AssertionError("unexpected wait")):
+            agent.run_forever(quiet=True)
+        self.assertEqual(len(engine.requests), 4)
+        self.assertIn("REASONING_STEP_1", json.dumps(engine.requests[-1]))
+        self.assertIn("REASONING_STEP_2", json.dumps(engine.requests[-1]))
+        self.assertEqual(json.dumps(engine.requests[-1]).count("Type: life_loop_continuation"), 2)
+        turns = [r["trigger"] for r in read_jsonl(self.paths.life_loop_log) if r["kind"] == "turn_started"]
+        self.assertEqual(turns, ["startup", "continuation", "continuation"])
+
+    def test_stop_during_text_only_generation_prevents_continuation(self):
+        def respond(number, messages):
+            agent._stop = True
+            return "<think>Finished generating.</think>"
+
+        agent, engine = self.agent(respond)
+        agent.run_forever(quiet=True)
+        self.assertEqual(len(engine.requests), 1)
+        self.assertEqual(read_json(self.paths.runtime_state)["status"], "stopped")
+
+    def test_pending_notification_takes_priority_over_continuation(self):
+        def respond(number, messages):
+            if number == 1:
+                agent.notifications.create(type="external_event", source="user", summary="NEW_EVENT")
+                return "<think>Finished a reasoning step.</think>"
+            return call("read_file", path="mind/self.txt")
+
+        agent, engine = self.agent(respond)
+        self.stop_after_tools(agent, 1)
+        agent.run_forever(quiet=True)
+        self.assertIn("NEW_EVENT", json.dumps(engine.requests[1]))
+        turns = [r["trigger"] for r in read_jsonl(self.paths.life_loop_log) if r["kind"] == "turn_started"]
+        self.assertEqual(turns, ["startup", "notification"])
+
+    def test_repeated_no_action_continuations_still_back_off(self):
+        agent, engine = self.agent(lambda *_: "<think>Nothing to do.</think>")
+
+        def observe_backoff(_seconds):
+            state = read_json(self.paths.sleep_state)
+            self.assertTrue(state["active"])
+            self.assertEqual(state["reason"], "repeated_no_action_output")
+            agent._stop = True
+
+        with mock.patch("artificium.runtime.time.sleep", side_effect=observe_backoff):
+            agent.run_forever(quiet=True)
+        self.assertEqual(len(engine.requests), 3)
+
+    def test_timed_sleep_waits_for_its_deadline_before_continuing(self):
+        request_times = []
+
+        def respond(number, messages):
+            request_times.append(self.clock)
+            if number <= 2:
+                return call("sleep", mode="timed", seconds=5, reflection_complete=number == 2)
+            return call("read_file", path="mind/self.txt")
+
+        agent, engine = self.agent(respond)
+        self.stop_after_tools(agent, 3)
+
+        def advance(seconds):
+            self.clock += seconds
+            self.assertLessEqual(self.clock, 5, "Timed sleep did not wake")
+
+        with mock.patch("artificium.runtime.time.time", side_effect=lambda: 1000 + self.clock), \
+             mock.patch("artificium.runtime.time.sleep", side_effect=advance):
+            agent.run_forever(quiet=True)
+        self.assertEqual(request_times, [0, 0, 5])
+        self.assertIn("timer", json.dumps(engine.requests[-1]))
 
     def test_sleep_still_completes_reflection_and_waits_for_an_event(self):
         def respond(number, messages):

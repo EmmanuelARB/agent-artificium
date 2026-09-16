@@ -183,7 +183,6 @@ class RevolutionCase(unittest.TestCase):
             provider="custom",
             model="test-model",
             base_url="http://example.invalid/v1",
-            heartbeat_seconds=30,
             context_window_tokens=20_000,
             context_reminder_tokens=2_000,
             max_direct_read_chars=1_000,
@@ -593,9 +592,8 @@ class RevolutionCase(unittest.TestCase):
         restarted.run_once(trigger="later-turn")
         self.assertEqual(self.paths.working_context.read_text().count("SYSTEM NOTIFICATION — RECOVERY"), 1)
 
-    def test_retry_timer_runs_without_heartbeat_or_notifications(self) -> None:
+    def test_retry_timer_runs_before_continuation_without_notifications(self) -> None:
         agent = Artificium(self.paths, engine=FakeEngine([]), console=Console(quiet=True))
-        agent.config.heartbeat_seconds = None
         clock = [100.0]
         attempts: list[tuple[float, str]] = []
 
