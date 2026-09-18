@@ -3,7 +3,7 @@
 **A general agent harness for long term autonomous work, continual learning, and self-improvement.**
 
 > [!NOTE]
-> **From the creator**
+> **From the creator, [gr.bio](https://gr.bio/)**
 >
 > I built Artificium for myself and have been using it as my own harness. This is its first public release: I am sharing it because I think the design could be useful to others, and I want to develop it into a general harness for continual learning and self-improvement.
 
