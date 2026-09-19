@@ -40,6 +40,8 @@ Setup verifies the connection with real, potentially billable model requests bef
 python3 artificium.py chat
 ```
 
+*Note: If you want a graphical Chat UI try to ask the agent to build a browser based ChatUI to talk with it and give you the link to open it*
+
 **Watch — inspect the agent's life-loop.** Open another terminal to follow its activity, tool use, and state changes:
 
 ```bash
