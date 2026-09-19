@@ -66,7 +66,8 @@ def preview_messages(paths: Paths, config: Config, *, self_directive: str | None
     inputs.append("[CONNECTION CHECK]\nThis is a setup diagnostic, not an active wake. "
                   "Do not perform the orientation or any task. Do not call tools. "
                   "Reply briefly with OK to confirm that you can receive this context.")
-    messages = [{"role": "system", "content": "\n\n---\n\n".join([*parts, header])}, *history,
+    messages = [{"role": "system", "content": "\n\n---\n\n".join(parts)}, *history,
+                {"role": config.runtime_message_role, "content": header},
                 {"role": config.runtime_message_role,
                  "content": prompts.runtime("input_batch", runtime_records="\n\n---\n\n".join(inputs))}]
     if visual_message:

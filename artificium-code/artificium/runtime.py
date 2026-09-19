@@ -275,12 +275,32 @@ class Artificium:
             ),
         )
 
-    def system_prompt(self, wake_reason: str = "runtime") -> str:
+    def stable_prompt(self) -> str:
+        """Everything the model is told that does not change between rounds.
+
+        This is the system message and therefore the cacheable prefix of every
+        request. Nothing that varies per inference belongs here: a single
+        changing character invalidates the provider or server prefix cache for
+        this block *and* for the whole working memory that follows it.
+        """
+
         self_text = self._read_pinned(self.paths.self_file, 50_000)
         meta = self._read_full(self.paths.meta_memory)
         pinned = self.prompts.runtime(
             "pinned_mind", self_content=self_text, meta_memory_content=meta
         )
+        return "\n\n---\n\n".join(
+            [self.prompts.always(), pinned, self.prompts.tool_catalog()]
+        )
+
+    def state_message(self, wake_reason: str = "runtime") -> dict[str, Any]:
+        """The volatile state block, carried in the tail of the request.
+
+        Kept out of working memory: it is rebuilt for every round and never
+        becomes part of the history, so the appended history stays a stable
+        prefix from one round to the next.
+        """
+
         visual_message = self.visual.request_message()
         visual_tokens = (
             self.estimator.messages([visual_message]) if visual_message is not None else 0
@@ -288,13 +308,22 @@ class Artificium:
         estimated = self.working.estimated_tokens(
             self._prompt_overhead() + visual_tokens
         )
+        return {
+            "role": self.config.runtime_message_role,
+            "content": self._state_header(wake_reason, estimated),
+            "_artificium": {"kind": "state_header"},
+        }
+
+    def system_prompt(self, wake_reason: str = "runtime") -> str:
+        """The complete reviewable prompt: stable block plus current state.
+
+        Retained for inspection, diagnostics and tests. The request path uses
+        `stable_prompt` and `state_message` separately so the two halves land
+        on opposite sides of the history.
+        """
+
         return "\n\n---\n\n".join(
-            [
-                self.prompts.always(),
-                pinned,
-                self.prompts.tool_catalog(),
-                self._state_header(wake_reason, estimated),
-            ]
+            [self.stable_prompt(), self.state_message(wake_reason)["content"]]
         )
 
     def _runtime_batch(self, records: list[str]) -> str:
@@ -307,9 +336,13 @@ class Artificium:
         working: list[dict[str, Any]] | None = None, include_images: bool = True,
     ) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": self.system_prompt(wake_reason)}
+            {"role": "system", "content": self.stable_prompt()}
         ]
         messages.extend(self.working.load() if working is None else working)
+        # Volatile tail. Everything above this point is byte-identical to the
+        # previous round whenever the history only grew, which is the shape a
+        # prefix cache can reuse.
+        messages.append(self.state_message(wake_reason))
         if inputs:
             messages.append(
                 {
