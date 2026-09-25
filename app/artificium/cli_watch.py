@@ -14,6 +14,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from typing import Callable
 
 from . import cli as _cli
 from . import display, events
@@ -126,6 +127,43 @@ def _tail_lines_from_end(path: Path, count: int, *, block_size: int = 65536) -> 
     return lines[-count:]
 
 
+def _tail_matching_lines(
+    path: Path, count: int, keep: Callable[[str], bool], *, block_size: int = 65536
+) -> list[str]:
+    """The last ``count`` complete lines of ``path`` for which ``keep`` holds.
+
+    Reads backwards in blocks like :func:`_tail_lines_from_end`, but counts
+    only kept lines, so a long run of records the viewer skips (a slow
+    request logs a progress record every second) cannot push the history
+    out of the window.
+    """
+
+    if count <= 0:
+        return []
+    kept: list[str] = []
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        position = handle.tell()
+        carry = b""
+        while position > 0 and len(kept) < count:
+            read_size = min(block_size, position)
+            position -= read_size
+            handle.seek(position)
+            data = handle.read(read_size) + carry
+            parts = data.split(b"\n")
+            # The first part may continue in the previous block; keep it back
+            # unless the start of the file has been reached.
+            carry = parts.pop(0) if position > 0 else b""
+            for raw in reversed(parts):
+                line = raw.decode("utf-8", errors="replace")
+                if line.strip() and keep(line):
+                    kept.append(line)
+                    if len(kept) >= count:
+                        break
+    kept.reverse()
+    return kept
+
+
 def _parse_only(value: str | None) -> set[str] | None:
     if not value:
         return None
@@ -142,7 +180,7 @@ def _parse_only(value: str | None) -> set[str] | None:
 def _watch_life_loop(
     paths: Paths,
     *,
-    tail: int = 30,
+    tail: int = 100,
     only: set[str] | None = None,
     no_thoughts: bool = False,
     since: str | None = None,
@@ -199,9 +237,32 @@ def _watch_life_loop(
         for text in display.render_record_lines(record, options, session):
             print(text, flush=True)
 
+    def shown(line: str) -> bool:
+        if json_mode:
+            return True
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(record, dict):
+            return False
+        kind = str(record.get("kind") or "event")
+        if kind in events.STREAMING_KINDS:
+            return False
+        if kind in events.HIDDEN_BY_DEFAULT_KINDS and not reasoning:
+            return False
+        return display.record_passes_filters(
+            record, only_categories=only, no_thoughts=no_thoughts, since=since_cutoff
+        )
+
     follower = _LogFollower(path)
     try:
-        for line in _tail_lines_from_end(path, tail):
+        history = _tail_matching_lines(path, tail, shown)
+        latest = _tail_lines_from_end(path, 1)
+        if latest and (not history or latest[-1] != history[-1]):
+            # Attached mid-request: end the history on the live progress line.
+            history.append(latest[-1])
+        for line in history:
             handle_line(line)
         follower.seek_end()
         while True:

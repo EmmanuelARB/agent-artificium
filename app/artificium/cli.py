@@ -81,6 +81,7 @@ from .cli_watch import (
     _parse_only,
     _print_life_record,
     _tail_lines_from_end,
+    _tail_matching_lines,
     _watch_life_loop,
 )
 
@@ -222,7 +223,10 @@ def build_parser() -> argparse.ArgumentParser:
     watch = commands.add_parser(
         "watch", help="Attach to the life-loop trace without restarting Artificium"
     )
-    watch.add_argument("--tail", type=int, default=30, help="Recent records to show first")
+    watch.add_argument(
+        "--tail", type=int, default=100,
+        help="Recent displayed records to show first (default: 100)",
+    )
     watch.add_argument(
         "--only",
         help=(

@@ -21,6 +21,7 @@ from artificium.cli import (
     _parse_only,
     _print_life_record,
     _tail_lines_from_end,
+    _tail_matching_lines,
     _watch_life_loop,
 )
 from artificium.filesystem import Paths, append_jsonl
@@ -383,6 +384,17 @@ class TailAndFollowCase(unittest.TestCase):
         self._write_lines(5)
         self.assertEqual(_tail_lines_from_end(self.path, 0), [])
 
+    def test_tail_matching_counts_only_kept_lines_across_blocks(self) -> None:
+        with self.path.open("a", encoding="utf-8") as handle:
+            for i in range(40):
+                handle.write(json.dumps({"kind": "thought", "content": f"line {i}"}) + "\n")
+                for _ in range(200):
+                    handle.write(json.dumps({"kind": "engine_progress", "generated_chars": i}) + "\n")
+        got = _tail_matching_lines(self.path, 25, lambda line: '"thought"' in line, block_size=512)
+        self.assertEqual([json.loads(line)["content"] for line in got], [f"line {i}" for i in range(15, 40)])
+        self.assertEqual(len(_tail_matching_lines(self.path, 100, lambda line: '"thought"' in line)), 40)
+        self.assertEqual(_tail_matching_lines(self.path, 0, lambda line: True), [])
+
     def test_log_follower_reads_newly_appended_lines(self) -> None:
         self._write_lines(3)
         follower = _LogFollower(self.path)
@@ -471,6 +483,21 @@ class WatchLoopIntegrationCase(unittest.TestCase):
         self.assertNotIn("hidden", rendered)
         self.assertIn("run_shell", rendered)
 
+
+    def test_history_survives_a_long_run_of_progress_records(self) -> None:
+        append_jsonl(self.paths.life_loop_log, {"kind": "thought", "content": "before the wait", "timestamp": _iso()})
+        for i in range(500):
+            append_jsonl(
+                self.paths.life_loop_log,
+                {"kind": "engine_progress", "generated_chars": i, "elapsed_seconds": i, "timestamp": _iso()},
+            )
+        output = io.StringIO()
+        from unittest import mock
+
+        with redirect_stdout(output):
+            with mock.patch("artificium.cli.time.sleep", side_effect=KeyboardInterrupt):
+                _watch_life_loop(self.paths, tail=5)
+        self.assertIn("before the wait", output.getvalue())
 
 if __name__ == "__main__":
     unittest.main()

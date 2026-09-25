@@ -620,7 +620,7 @@ Continuous `run` and background `start` have no turn-count or turn-duration limi
 
 | Option | Effect |
 |---|---|
-| `--tail N` | Show the last N records first (default 30). |
+| `--tail N` | Show the last N displayed records first (default 100); records the view skips, such as per-second progress during a long request, do not count. |
 | `--only CATEGORIES` | Comma-separated subset of `turns`, `engine`, `tools`, `thoughts`, `context`, `memory`, `notifications`, `recovery`. |
 | `--no-thoughts` | Hide the model's thoughts and outputs. |
 | `--reasoning` | Also show provider reasoning traces (hidden by default). |
