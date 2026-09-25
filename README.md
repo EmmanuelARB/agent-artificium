@@ -3,11 +3,25 @@
 **A general agent harness for long term autonomous work, continual learning, and self-improvement.**
 
 > [!NOTE]
-> **From the creator, [gr.bio](https://gr.bio/)**
->
-> I built Artificium for myself and have been using it as my own harness. This is its first public release: I am sharing it because I think the design could be useful to others, and I want to develop it into a general harness for continual learning and self-improvement.
+> **This is a fork.** Artificium was created by [gr](https://gr.bio/), who built it as their own harness and published it at [officialgr/agent-artificium](https://github.com/officialgr/agent-artificium). The design and the original code are theirs. This fork is maintained by [EmmanuelARB](https://github.com/EmmanuelARB) and is not affiliated with or endorsed by the original author.
 
-Artificium gives an agent **full control over its own environment**, lets it **work indefinitely with or without external interactions**, and **retains its experience for future retrieval**. The agent **manages its own context window**: it chooses what stays loaded, what to offload into long-term memory, and what to retrieve or revisit. Across that continuous life-loop it can build tools, revise its Self, and improve its own methods, while its entire history stays available for learning and its active context stays focused on the work at hand.
+## Why this fork
+
+This fork develops Artificium by running real instances on long, open-ended tasks, reading their logs critically, and fixing the general mechanism behind each weakness found, never the task where it showed up. The harness stays general-purpose: no change is made for one task, one model, or one domain. Releases from 1.10.1 on are published here and differ from the original project. The main additions so far:
+
+- **One `app/` tree** for the runtime, prompt pack, seed, and tests, with a contributor guide in `AGENTS.md`.
+- **File safety:** every overwrite by `write_file` or `save_memory` keeps a rotated backup, and an overwrite that would shrink a large file to under half its size is refused unless explicitly allowed.
+- **Tool-call robustness:** valid calls before a malformed one still run; the rest are withheld with a repair notice.
+- **Web search and fetch** as shipped standard-library tools.
+- **Overrides that survive upgrades:** code overlays written against an older release keep working, checked against historical copies in the test suite.
+- **Token accounting:** calibrated token counts, per-request and per-turn usage, and cache-miss warnings in `watch`.
+- **Explicit configuration:** `config.json` lists every setting, defaults included, so its meaning does not change when a later release changes a default.
+- **`watch` history** counts only records it displays, so a long wait for the model no longer hides it.
+- **`upgrade`** moves a clone of the original project to this fork.
+
+## What Artificium is
+
+Artificium gives an agent full control over its own environment, lets it work indefinitely with or without outside interaction, and keeps its experience for later retrieval. The agent manages its own context window: it decides what stays loaded, what goes to long-term memory, and what to retrieve or revisit. Along that continuous life-loop it can build tools, revise its Self, and improve its methods, while its whole history stays available for learning and its active context stays on the work at hand.
 
 [Quick start](#quick-start) · [Architecture and features](#architecture-and-features) · [Complete guide](#complete-guide) · [Future improvements](#future-improvements)
 
@@ -29,7 +43,7 @@ Artificium gives an agent **full control over its own environment**, lets it **w
 Clone the repository and run it in place:
 
 ```bash
-git clone https://github.com/officialgr/agent-artificium.git
+git clone https://github.com/EmmanuelARB/agent-artificium.git
 cd agent-artificium
 python3 artificium.py
 ```
@@ -825,7 +839,7 @@ python3 artificium.py upgrade &&
 python3 artificium.py start
 ```
 
-`upgrade` is a guarded `git pull`: it refuses while the agent runs, refuses if tracked files were edited locally, then fetches the tracked branch and fast-forwards to it. Git ignores `config.json`, `.secrets.json`, and `workspace/`, so they are never touched. If the clone has commits of its own that are not upstream, nothing changes and you reconcile them with Git yourself. A plain `git pull` with the agent stopped does the same, without the checks below.
+`upgrade` is a guarded `git pull`: it refuses while the agent runs, refuses if tracked files were edited locally, then fetches the tracked branch and fast-forwards to it. Git ignores `config.json`, `.secrets.json`, and `workspace/`, so they are never touched. If the clone has commits of its own that are not upstream, nothing changes and you reconcile them with Git yourself. A clone that still tracks the original project (`officialgr/agent-artificium`) is moved to this fork first, and `upgrade` says so; `upgrade --check` previews the fork without moving anything. A plain `git pull` with the agent stopped does the same, without the checks below.
 
 An override keeps winning after an upgrade even if the file it shadows changed. `upgrade` lists every override that hides a changed file; review each with `overrides diff NAME` and drop stale ones with `overrides clear NAME`. New seed memories are delivered on the next start without touching existing ones.
 
@@ -844,7 +858,7 @@ Run it with the agent stopped. It deletes `workspace/`, after confirmation (`--y
 An installation with the earlier `app/` + `workspace/` layout moves into a fresh clone with its settings and mind intact:
 
 ```bash
-git clone https://github.com/officialgr/agent-artificium.git ~/agent-artificium
+git clone https://github.com/EmmanuelARB/agent-artificium.git ~/agent-artificium
 mv OLD_INSTALL/config.json OLD_INSTALL/.secrets.json OLD_INSTALL/workspace ~/agent-artificium/
 ```
 

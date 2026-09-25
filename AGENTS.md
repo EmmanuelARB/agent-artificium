@@ -45,7 +45,7 @@ writes). Never commit them, and never read or print `.secrets.json`.
 | Configuration and setup | `config.py`, `setup.py`, `setup_ui.py` |
 | CLI | `cli.py`, `cli_admin.py`, `cli_chat.py`, `cli_service.py`, `cli_watch.py`, `display.py`, `operator.py` |
 | Code overlays | `_bootstrap.py`, `__init__.py` |
-| Upgrade | `upgrade.py` (guarded `git pull`) |
+| Upgrade | `upgrade.py` (guarded `git pull`; moves a clone of the original project to this fork, `REPOSITORY_URL`) |
 | Version | `version.py` (the only place the application version is written) |
 
 ## Core mechanisms to understand before changing them

@@ -13,7 +13,7 @@ from artificium.cli import main
 from artificium.filesystem import Paths
 from artificium.initialization import initialize_mind
 from artificium.records import Records
-from artificium.upgrade import upgrade
+from artificium.upgrade import _repository_key, upgrade
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -95,6 +95,55 @@ class UpgradeCase(unittest.TestCase):
         self.assertEqual(result["changed_files"], 3)
         self.assert_not_upgraded()
         self.assert_preserved()
+
+    def moved_home(self):
+        """A new home that carries one more commit than the original project."""
+        home = self.directory / "fork"
+        subprocess.run(["git", "clone", "-q", str(self.source), str(home)], check=True, capture_output=True)
+        (home / "app/artificium/fork_only.py").write_text("FORK = True\n")
+        self.commit(home)
+        return home
+
+    def remote_url(self):
+        return self.git(self.paths.install, "remote", "get-url", "origin").strip()
+
+    def test_a_clone_of_the_original_project_moves_to_the_new_home(self):
+        home = self.moved_home()
+        with mock.patch("artificium.upgrade.ORIGINAL_REPOSITORY", str(self.source) + ".git/"), \
+                mock.patch("artificium.upgrade.REPOSITORY_URL", str(home)):
+            result = self.run_upgrade()
+        self.assertEqual(self.remote_url(), str(home))
+        self.assertEqual(result["changed_files"], 4)
+        self.assertTrue((self.paths.app / "artificium/fork_only.py").is_file())
+        self.assert_preserved()
+
+    def test_check_previews_the_new_home_without_moving_the_remote(self):
+        home = self.moved_home()
+        with mock.patch("artificium.upgrade.ORIGINAL_REPOSITORY", str(self.source)), \
+                mock.patch("artificium.upgrade.REPOSITORY_URL", str(home)), \
+                mock.patch("artificium.upgrade.process_state", return_value={"alive": True}):
+            result = upgrade(self.paths, check=True, report=lambda _: None)
+        self.assertEqual(result["changed_files"], 4)
+        self.assertEqual(self.remote_url(), str(self.source))
+        self.assert_not_upgraded()
+
+    def test_a_clone_of_another_repository_is_left_where_it_is(self):
+        with mock.patch("artificium.upgrade.REPOSITORY_URL", str(self.directory / "elsewhere")):
+            self.run_upgrade()
+        self.assertEqual(self.remote_url(), str(self.source))
+
+    def test_repository_key_matches_every_spelling_of_one_repository(self):
+        spellings = (
+            "https://github.com/officialgr/agent-artificium",
+            "https://github.com/officialgr/agent-artificium/",
+            "https://github.com/OfficialGR/agent-artificium.git",
+            "git@github.com:officialgr/agent-artificium.git",
+            "ssh://git@github.com/officialgr/agent-artificium.git",
+        )
+        for url in spellings:
+            self.assertEqual(_repository_key(url), "github.com/officialgr/agent-artificium", url)
+        self.assertNotEqual(_repository_key("https://github.com/someone/agent-artificium"),
+                            "github.com/officialgr/agent-artificium")
 
     def test_apply_refuses_a_running_agent(self):
         with mock.patch("artificium.upgrade.process_state", return_value={"alive": True}):

@@ -339,7 +339,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(captured["url"], "http://127.0.0.1:11434/api/chat")
         self.assertNotIn("authorization", captured["headers"])
         self.assertEqual(
-            captured["headers"]["user-agent"], "Artificium-revolution/1.10.3"
+            captured["headers"]["user-agent"], "Artificium-revolution/1.10.4"
         )
         self.assertEqual(captured["payload"]["options"]["num_ctx"], 32_768)
         self.assertIs(captured["payload"]["think"], False)
@@ -1245,7 +1245,7 @@ class RevolutionCase(unittest.TestCase):
         request_headers = {key.lower(): value for key, value in request.headers.items()}
         self.assertNotIn("authorization", request_headers)
         self.assertEqual(
-            request_headers["user-agent"], "Artificium-revolution/1.10.3"
+            request_headers["user-agent"], "Artificium-revolution/1.10.4"
         )
         self.assertEqual(opened.call_args.kwargs["timeout"], 0.25)
 
@@ -1707,7 +1707,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertNotIn("mind/working_memory", prompt)
         self.assertIn("offload_working_memory", prompt)
         self.assertIn("schedule_task", prompt)
-        self.assertEqual("Artificium-revolution-1.10.3", agent.prompts.version)
+        self.assertEqual("Artificium-revolution-1.10.4", agent.prompts.version)
         self.assertIn("Harness Notifications", prompt)
         self.assertIn("complete meta-memory", prompt)
         self.assertIn("Compression is not a demand to minimize file size", prompt)

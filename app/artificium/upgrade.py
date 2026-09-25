@@ -14,6 +14,11 @@ from .filesystem import Paths, file_lock
 from .operator import process_state
 from .runtime import ProcessLock
 
+# This fork's home. A clone that still tracks the original project is moved
+# here on upgrade, since the original no longer carries this fork's releases.
+REPOSITORY_URL = "https://github.com/EmmanuelARB/agent-artificium.git"
+ORIGINAL_REPOSITORY = "github.com/officialgr/agent-artificium"
+
 
 def _git(paths: Paths, *args: str, timeout: float = 60) -> str:
     try:
@@ -53,6 +58,34 @@ def shadowed_overrides(paths: Paths, changes: list[str]) -> list[str]:
     return shadowed
 
 
+def _repository_key(url: str) -> str:
+    """``host/owner/name`` for any spelling of a Git URL (https, ssh, scp-like)."""
+    key = url.strip().lower()
+    for prefix in ("https://", "http://", "ssh://", "git://"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
+    key = key.split("@", 1)[-1] if "@" in key.split("/", 1)[0] else key
+    if ":" in key.split("/", 1)[0]:
+        key = key.replace(":", "/", 1)
+    key = key.rstrip("/")
+    return key[:-4] if key.endswith(".git") else key
+
+
+def _moved_remote(paths: Paths) -> tuple[str, str, str] | None:
+    """(remote, old URL, branch) when the tracked remote is the original project."""
+    try:
+        branch = _git(paths, "symbolic-ref", "--short", "HEAD").strip()
+        remote = _git(paths, "config", "--get", f"branch.{branch}.remote").strip()
+        merge = _git(paths, "config", "--get", f"branch.{branch}.merge").strip()
+        url = _git(paths, "remote", "get-url", remote).strip()
+    except RuntimeError:
+        return None
+    if _repository_key(url) != _repository_key(ORIGINAL_REPOSITORY):
+        return None
+    return remote, url, merge.removeprefix("refs/heads/")
+
+
 def _require_stopped(paths: Paths) -> None:
     if process_state(paths)["alive"]:
         raise RuntimeError("Stop Artificium before upgrading: python3 artificium.py stop")
@@ -78,8 +111,20 @@ def upgrade(paths: Paths, *, check: bool = False, report: Callable[[str], None] 
         upstream = _git(paths, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}").strip()
     except RuntimeError as error:
         raise RuntimeError("The current branch tracks no remote branch; run git pull yourself.") from error
-    report(f"Fetching {upstream}…")
-    _git(paths, "fetch", "--quiet", timeout=180)
+    moved = _moved_remote(paths)
+    if moved and check:
+        remote, url, branch = moved
+        report(f"{remote} points at the original project ({url}); upgrade will move it to "
+               f"{REPOSITORY_URL}. Previewing that repository…")
+        _git(paths, "fetch", "--quiet", REPOSITORY_URL, branch, timeout=180)
+        upstream = "FETCH_HEAD"
+    else:
+        if moved:
+            remote, url, _ = moved
+            _git(paths, "remote", "set-url", remote, REPOSITORY_URL)
+            report(f"Moved {remote} from the original project ({url}) to {REPOSITORY_URL}.")
+        report(f"Fetching {upstream}…")
+        _git(paths, "fetch", "--quiet", timeout=180)
     changes = [line for line in _git(paths, "diff", "--name-only", "HEAD", upstream).splitlines() if line]
     revision = _git(paths, "rev-parse", "--short=12", upstream).strip()
     shadowed = shadowed_overrides(paths, changes)
