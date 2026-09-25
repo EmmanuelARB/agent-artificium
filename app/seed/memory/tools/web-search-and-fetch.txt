@@ -1,0 +1,87 @@
+Tool
+
+Executables: `mind/tools/search.py`, `mind/tools/fetch.py`
+Runtime state: none persisted by the tools themselves; `fetch.py` saves
+fetched text under `mind/space/fetched/` (path printed) or to --out, which is
+ordinary workspace output, not tool state.
+
+Both are standalone, editable scripts run through `run_shell`, standard
+library only. Neither is loaded by the harness the way `scheduler.py` is;
+invoke them exactly as their own `--help` and module docstrings say, since
+those are the authoritative, up-to-date interface (flags and exit codes are
+kept there, not duplicated here).
+
+search.py: bounded, structured lookup
+
+    python3 mind/tools/search.py "query" [-n COUNT] [--engine NAME]
+
+Tries engines in order and stops at the first one that answers with parsed
+results: exa (keyless Exa MCP web_search_exa; the primary engine, general
+web), brave, wikipedia (encyclopedia only, but reliable), duckduckgo
+(unreachable from some hosts). It prints which engine answered and, on
+stderr, exactly why any earlier engine was skipped, so a bad run is
+diagnosable instead of a silent shrug.
+
+fetch.py: bulk text retrieval
+
+    python3 mind/tools/fetch.py URL [URL ...] [--max-chars N] [--out PATH] [--method NAME]
+
+For each URL it tries, in order: a direct HTTP GET (an honest User-Agent
+first, then a browser-like one only if the plain one is refused), the same
+keyless Exa MCP endpoint's web_fetch_exa (handles PDFs and several hard
+sites directly), then two best-effort last resorts with short timeouts
+(a Jina Reader proxy, a Wayback Machine snapshot). It stops at the first
+method that returns real content, saves the full extracted text to a file
+(path always printed), and prints a bounded excerpt. It also rewrites arXiv
+abs/pdf/html URLs and GitHub blob/repo URLs before the first attempt (see
+below), and never raises a traceback for a network failure — every failure
+is a reported line, not a crash.
+
+Known blocks and quirks, verified 2026-09-24/25
+
+- Exa's keyless MCP endpoint (both tools) has a modest anonymous rate limit;
+  a 429 is expected occasionally under repeated use and both tools fall back
+  automatically and say so. Setting EXA_API_KEY is optional, never required.
+- A "soft block" is a page that answers HTTP 200 but is a bot-challenge or
+  consent wall, not content (Cloudflare "Just a moment...", "Attention
+  Required", generic "enable JavaScript and cookies" walls, captchas, or
+  suspiciously short extracted text). fetch.py detects these and treats them
+  as a failure with a reason, on both the direct and the Exa path.
+- hal.science serves a real PDF to a plain/curl-like User-Agent but an Anubis
+  "Making sure you're not a bot!" challenge to a browser-like one — the
+  opposite of the usual case. This is exactly why the direct method tries
+  the honest User-Agent first, not the browser one.
+- JSTOR returns "Client Challenge" even through Exa's fetch tool: some
+  publishers are simply not reachable this way. Treat a clean, clearly
+  reported failure on a paywalled/legal-gated source as the correct outcome,
+  not a bug to keep retrying.
+- ScienceDirect and PDFs in general are handled reasonably well by Exa's
+  fetch tool even when a direct GET is not fruitful.
+- r.jina.ai (Jina Reader) answers 401 to anonymous callers on at least some
+  networks; web.archive.org is sometimes slow or unresponsive. Both are kept
+  as last resorts specifically because they are unreliable, hence the short
+  timeouts — do not depend on either being available.
+- For an arXiv paper, prefer letting fetch.py's own rewriting try the HTML
+  full text and abs metadata; if both fail, go straight to the export API
+  (http://export.arxiv.org/api/query?id_list=ID) for structured metadata, or
+  https://arxiv.org/e-print/ID for the raw source, rather than re-fetching
+  the same PDF repeatedly.
+- For a GitHub file, fetch.py already rewrites a `blob` URL to
+  raw.githubusercontent.com. For a whole repository, it only prints a
+  `git clone --depth 1 ...` suggestion; run that yourself when you actually
+  need the tree, rather than scraping the HTML repo page.
+
+Working with what comes back
+
+A page fetched this way is evidence of uneven, unverified quality, not a
+settled fact: search snippets are truncated by construction, a "successful"
+fetch can still be a stale mirror, an SEO-optimized restatement, or simply
+wrong, and different engines/methods can disagree. Cross-check load-bearing
+claims against a second independent source before treating them as
+established, and say in memory or output which method actually produced the
+material (e.g. "via Exa fetch" vs. "direct GET") when it matters to how much
+to trust it.
+
+Update this memory when search/fetch experience reveals a verified better
+pattern, a new reliable engine or method, or a failure mode not yet listed
+here. Keep exact flags and exit codes in the tools' own docstrings.

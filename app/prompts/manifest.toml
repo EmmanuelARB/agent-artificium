@@ -1,0 +1,51 @@
+version = "Artificium-revolution-1.10.1"
+
+always = [
+  "always/core.md",
+  "always/memory.md",
+  "always/interactions.md",
+  "always/notifications.md",
+  "always/tool_protocol.md",
+]
+
+tool_catalog = [
+  "tools/core_tools.md",
+]
+
+[runtime]
+state_header = "runtime/state_header.md"
+pinned_mind = "runtime/pinned_mind.md"
+input_batch = "runtime/input_batch.md"
+tool_result = "runtime/tool_result.md"
+restored_checkpoint = "runtime/restored_checkpoint.md"
+emergency_summary = "runtime/emergency_summary.md"
+
+[events]
+first_wake = "events/first_wake.md"
+wake = "events/wake.md"
+interaction_arrived = "events/interaction_arrived.md"
+async_output_ready = "events/async_output_ready.md"
+context_milestone = "events/context_milestone.md"
+context_pressure = "events/context_pressure.md"
+mandatory_offload = "events/mandatory_offload.md"
+memory_opportunity = "events/memory_opportunity.md"
+memory_organization = "events/memory_organization.md"
+meta_memory_pressure = "events/meta_memory_pressure.md"
+pinned_mind_changed = "events/pinned_mind_changed.md"
+working_memory_offload_reflection = "events/working_memory_offload_reflection.md"
+working_memory_offloaded = "events/working_memory_offloaded.md"
+attention_opened = "events/attention_opened.md"
+attention_chunk = "events/attention_chunk.md"
+attention_completed = "events/attention_completed.md"
+pre_sleep = "events/pre_sleep.md"
+pre_self_revision = "events/pre_self_revision.md"
+post_self_revision = "events/post_self_revision.md"
+recovery = "events/recovery.md"
+request_repair = "events/request_repair.md"
+runtime_notice_summary = "events/runtime_notice_summary.md"
+external_event = "events/external_event.md"
+tool_call_repair = "events/tool_call_repair.md"
+tool_execution_error = "events/tool_execution_error.md"
+shell_timeout = "events/shell_timeout.md"
+visual_context_released = "events/visual_context_released.md"
+initialization_pending = "events/initialization_pending.md"
