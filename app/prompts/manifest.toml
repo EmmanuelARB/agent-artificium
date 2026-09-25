@@ -1,4 +1,4 @@
-version = "Artificium-revolution-1.10.1"
+version = "Artificium-revolution-1.10.2"
 
 always = [
   "always/core.md",

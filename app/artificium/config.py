@@ -493,12 +493,10 @@ class Config:
         return cls(**supplied)
 
     def grouped_dict(self) -> dict[str, Any]:
-        values = self.public_dict()
+        # Write every field, defaults included: a saved file then keeps its
+        # meaning when a later release changes a default.
+        values = {item.name: getattr(self, item.name) for item in dataclasses.fields(self)}
         values.pop("schema_version", None)
-        values["request_timeout_seconds"] = self.request_timeout_seconds
-        # Always show the small set of operator-facing harness policies.
-        for name in ("vision_preference", "mandatory_offload", "offload_threshold_percent", "working_memory_tokens", "working_memory_fraction", "auto_repair"):
-            values[name] = getattr(self, name)
         return {
             "schema_version": 3,
             "harness": {k: v for k, v in values.items() if k not in MODEL_FIELDS},

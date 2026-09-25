@@ -153,6 +153,15 @@ class FinalReleaseCase(unittest.TestCase):
         self.assertEqual(grouped['model']['top_k'], 17)
         self.assertEqual(ConfigStore(self.paths).load(), loaded)
 
+    def test_saved_config_lists_every_setting_including_defaults(self):
+        ConfigStore(self.paths).save(self.config)
+        grouped = read_json(self.paths.config)
+        written = {*grouped['harness'], *grouped['model'], 'schema_version'}
+        self.assertEqual(written, {item.name for item in dataclasses.fields(Config)})
+        self.assertIn('stop_sequences', grouped['model'])
+        self.assertIn('max_life_loop_rounds', grouped['harness'])
+        self.assertEqual(ConfigStore(self.paths).load(), self.config)
+
     def test_grouped_config_ignores_retired_heartbeat_values(self):
         for value in (None, 30, 3600):
             with self.subTest(heartbeat=value):

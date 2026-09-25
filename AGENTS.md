@@ -76,8 +76,10 @@ writes). Never commit them, and never read or print `.secrets.json`.
   a test pass; they are historical records.
 - **Configuration.** `config.json` has a `harness` and a `model` section;
   model fields are those in `config.MODEL_FIELDS`, and putting a field in the
-  wrong section is a load error. Only non-default values are written, so a
-  missing key means "default", not "off". Defaults that should apply only to
+  wrong section is a load error. Every save writes every field, defaults
+  included, so a saved file keeps its meaning when a later release changes a
+  default; a key missing from an older, hand-edited, or not yet re-saved file
+  means the current default, not "off". Defaults that should apply only to
   new installations (for example streaming) belong in the setup path, never
   silently applied to an existing `config.json`.
 - **Tools.** A model-facing tool needs: its handler registered in

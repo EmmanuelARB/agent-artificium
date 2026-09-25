@@ -497,7 +497,7 @@ python3 artificium.py configure model --custom-contract none --url http://localh
 <details>
 <summary><strong>Configuration: context, offloading, vision, and generation controls</strong></summary>
 
-Settings live in `config.json` in the project folder (ignored by Git), saved atomically, with a `harness` and a `model` section. Inspect them with `config`, `config harness`, or `config model`. Change harness preferences offline with `configure harness`; use `connect` or `configure model` for a verified model change. Configuration changes take effect after `restart`; a replaced API key reloads on its own.
+Settings live in `config.json` in the project folder (ignored by Git), saved atomically, with a `harness` and a `model` section. Every save writes every setting, defaults included, so a saved file keeps its meaning when a later release changes a default; a setting missing from the file takes the current default. Inspect them with `config`, `config harness`, or `config model`. Change harness preferences offline with `configure harness`; use `connect` or `configure model` for a verified model change. Configuration changes take effect after `restart`; a replaced API key reloads on its own.
 
 ```bash
 python3 artificium.py configure harness --vision auto
