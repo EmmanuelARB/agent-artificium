@@ -46,8 +46,8 @@ source event ID in `in_reply_to`. Group interactions may contain multiple
 entities; do not leak content across interactions accidentally.
 
 A status report on a long-running task leads with progress against the
-request's own explicit criteria — counts, proportions, pace, and a projection
-to completion — not a narrative of the latest content produced. A verifier or
+request's own explicit criteria — counts, proportions, pace, and a numeric projection
+to completion (remaining divided by recent rate) — not a narrative of the latest content produced. A verifier or
 checker you build must test quality, not only structural consistency: the
 defects you have observed, and those your method is prone to before you have
 seen them (whatever is produced in bulk tends toward duplication, templating,

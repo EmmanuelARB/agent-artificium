@@ -339,7 +339,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(captured["url"], "http://127.0.0.1:11434/api/chat")
         self.assertNotIn("authorization", captured["headers"])
         self.assertEqual(
-            captured["headers"]["user-agent"], "Artificium-revolution/1.10.4"
+            captured["headers"]["user-agent"], "Artificium-revolution/1.10.5"
         )
         self.assertEqual(captured["payload"]["options"]["num_ctx"], 32_768)
         self.assertIs(captured["payload"]["think"], False)
@@ -1245,7 +1245,7 @@ class RevolutionCase(unittest.TestCase):
         request_headers = {key.lower(): value for key, value in request.headers.items()}
         self.assertNotIn("authorization", request_headers)
         self.assertEqual(
-            request_headers["user-agent"], "Artificium-revolution/1.10.4"
+            request_headers["user-agent"], "Artificium-revolution/1.10.5"
         )
         self.assertEqual(opened.call_args.kwargs["timeout"], 0.25)
 
@@ -1698,6 +1698,17 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(len(result["_notifications"]), 2)
         self.assertIn("MEMORY ORGANIZATION", result["_notifications"][1])
 
+    def test_pace_guidance_states_both_failures_and_asks_for_a_number(self) -> None:
+        agent = Artificium(self.paths, engine=FakeEngine([]), console=Console(quiet=True))
+        prompt = " ".join(agent.system_prompt("test").split())
+        # Filler and a trickle are both failures; neither guard may stand alone.
+        self.assertIn("A count met with filler is not met", prompt)
+        self.assertIn("output shrinking to a trickle is not rigor", prompt)
+        self.assertIn("numeric projection to completion", prompt)
+        reflection = " ".join(agent.prompts.event("working_memory_offload_reflection").split())
+        self.assertIn("The projection is a number", reflection)
+        self.assertIn("cut overhead repeated per unit", reflection)
+
     def test_system_prompt_is_reviewable_and_has_no_unfilled_fields(self) -> None:
         agent = Artificium(self.paths, engine=FakeEngine([]), console=Console(quiet=True))
         prompt = agent.system_prompt("test")
@@ -1707,7 +1718,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertNotIn("mind/working_memory", prompt)
         self.assertIn("offload_working_memory", prompt)
         self.assertIn("schedule_task", prompt)
-        self.assertEqual("Artificium-revolution-1.10.4", agent.prompts.version)
+        self.assertEqual("Artificium-revolution-1.10.5", agent.prompts.version)
         self.assertIn("Harness Notifications", prompt)
         self.assertIn("complete meta-memory", prompt)
         self.assertIn("Compression is not a demand to minimize file size", prompt)

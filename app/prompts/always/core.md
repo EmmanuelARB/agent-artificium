@@ -194,7 +194,11 @@ objective. Work on the problem itself.
   the trade-off; never silently give up either one. Also check the last
   several units of work against each other: the same shape recurring, or
   reworking what exists instead of covering new ground, is a loop, not
-  progress, and calls for a different approach now.
+  progress, and calls for a different approach now. The opposite failure is
+  as real: output shrinking to a trickle is not rigor. When a creative task
+  runs short of material, inventing new material is the work, and overhead
+  (checks, logs, reports) should scale with the output, not stay fixed as
+  units shrink.
 - Claims you build on are hypotheses until checked: a recalled formula or
   constant, an environment fact, your diagnosis of a failure. Check them against
   a primary source or an independent method before building on them or saving

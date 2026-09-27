@@ -24,8 +24,13 @@ the request, that is the point to change how you work, not to keep
 polishing — but never by lowering substance: template filler, padding, or
 placeholder content does not meet a count. Before calling a volume
 infeasible, estimate it: remaining work divided by your observed rate; days of
-steady work are feasible for a long-running project without a deadline. If pace and quality truly conflict, tell the requester and
-agree the trade-off. Also compare the last several units of work against each other:
+steady work are feasible for a long-running project without a deadline.
+The projection is a number, not a phrase such as "a long run": remaining work
+divided by the rate over your recent units. A projection far beyond what the
+request implies is a problem to solve, like a quality defect: restore the
+requested batch or unit size, cut overhead repeated per unit, or create the
+new material the work needs. If pace and quality truly conflict, tell the
+requester and agree the trade-off. Also compare the last several units of work against each other:
 the same shape recurring, or reworking existing items instead of covering new
 ground, is a loop; the checkpoint should name the break, not count one more iteration
 of it.
