@@ -79,6 +79,12 @@ class ToolRegistry(
             "allow_shrink": False,
         },
         "run_shell": {"tool": "run_shell", "command": "COMMAND", "cwd": "PATH"},
+        "track_artifact": {
+            "tool": "track_artifact",
+            "path": "PATH",
+            "update_every_hours": 24,
+            "note": "WHAT_IT_RECORDS",
+        },
         "load_images": {
             "tool": "load_images",
             "paths": ["IMAGE_PATH"],
@@ -266,7 +272,8 @@ class ToolRegistry(
         # Tools added after a mixin was first shipped: a workspace overlay of
         # that mixin written against an older release may lack them, and the
         # registry must still start.
-        for name in ("record_directive", "retire_directive", "request_review"):
+        for name in ("record_directive", "retire_directive", "request_review",
+                     "track_artifact"):
             method = getattr(self, name, None)
             if callable(method):
                 self._functions[name] = method

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from . import _bootstrap
+from .artifacts import ArtifactTracker
 from .config import ConfigStore, SecretsStore
 from .directives import DirectiveStore
 from .engine import Engine, EngineError, EngineReply, PreparedRequest, make_engine
@@ -1209,6 +1210,12 @@ class Artificium:
             free_percent=f"{usage.free / usage.total * 100:.1f}" if usage.total else "0",
         )]
 
+    def _artifact_events(self) -> list[str]:
+        lines = ArtifactTracker(self.paths, self.records).reminders()
+        if not lines:
+            return []
+        return [self.prompts.event("artifact_reminder", items="\n".join(lines))]
+
     def _context_events(self) -> list[str]:
         overhead = self._prompt_overhead()
         notice = self.working.pressure_notice(overhead)
@@ -1383,6 +1390,7 @@ class Artificium:
             )))
         inputs.extend(self._context_events())
         inputs.extend(self._disk_space_events())
+        inputs.extend(self._artifact_events())
         inputs.extend(self._pinned_mind_notices())
         # Recheck the memory map when it changes, without needing a timed
         # turn boundary or repeating guidance for an unchanged map.

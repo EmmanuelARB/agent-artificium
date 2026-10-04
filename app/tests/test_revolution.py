@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import tempfile
 import threading
 import time
@@ -339,7 +340,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(captured["url"], "http://127.0.0.1:11434/api/chat")
         self.assertNotIn("authorization", captured["headers"])
         self.assertEqual(
-            captured["headers"]["user-agent"], "Artificium-revolution/1.10.10"
+            captured["headers"]["user-agent"], "Artificium-revolution/1.10.11"
         )
         self.assertEqual(captured["payload"]["options"]["num_ctx"], 32_768)
         self.assertIs(captured["payload"]["think"], False)
@@ -469,6 +470,10 @@ class RevolutionCase(unittest.TestCase):
                 raise EngineError("HTTP 400: Failed to tokenize prompt", status=400)
 
         engine = RejectText()
+        # The provider's rejection is the subject here, so leave the shipped
+        # prompt pack and the image enough room to reach the provider.
+        self.config.context_window_tokens = 32_000
+        ConfigStore(self.paths).save(self.config)
         agent = Artificium(self.paths, engine=engine, console=Console(quiet=True))
         agent.visual.load([str(image)], retention="once")
         before = agent.visual.list()
@@ -1245,7 +1250,7 @@ class RevolutionCase(unittest.TestCase):
         request_headers = {key.lower(): value for key, value in request.headers.items()}
         self.assertNotIn("authorization", request_headers)
         self.assertEqual(
-            request_headers["user-agent"], "Artificium-revolution/1.10.10"
+            request_headers["user-agent"], "Artificium-revolution/1.10.11"
         )
         self.assertEqual(opened.call_args.kwargs["timeout"], 0.25)
 
@@ -1783,6 +1788,55 @@ class RevolutionCase(unittest.TestCase):
                 seen.append(bool(agent._disk_space_events()))
         self.assertEqual(seen, [False, True, False, True, False, True, False, True])
 
+    def test_tracked_records_remind_when_they_fall_behind(self) -> None:
+        from artificium.artifacts import ArtifactTracker
+
+        *_, tools = self.components()
+        record = self.paths.space / "PROGRESS.md"
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text("progress\n")
+        with self.assertRaises(FileNotFoundError):
+            tools.track_artifact("mind/space/missing.md")
+        tracked = tools.track_artifact(str(record), update_every_hours=2, note="the progress log")
+        self.assertEqual(tracked["status"], "tracked")
+
+        tracker = ArtifactTracker(self.paths, self.records)
+        start = dt.datetime.now(dt.timezone.utc)
+        self.assertEqual(tracker.reminders(start), [])
+        later = start + dt.timedelta(hours=3)
+        lines = tracker.reminders(later)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("the progress log", lines[0])
+        self.assertEqual(tracker.reminders(later + dt.timedelta(minutes=30)), [])
+        self.assertEqual(len(tracker.reminders(later + dt.timedelta(hours=2, minutes=1))), 1)
+
+        self.assertEqual(tools.track_artifact(str(record), stop=True)["status"], "untracked")
+        self.assertEqual(tracker.reminders(later + dt.timedelta(hours=9)), [])
+
+    @unittest.skipUnless(shutil.which("git"), "git is not installed")
+    def test_a_workspace_repository_with_stale_uncommitted_work_is_noticed(self) -> None:
+        def git(*arguments: str, **env: str) -> None:
+            subprocess.run(
+                ["git", "-C", str(self.paths.root), "-c", "user.name=t",
+                 "-c", "user.email=t@example.invalid", *arguments],
+                check=True, capture_output=True, env={**os.environ, **env},
+            )
+
+        source = self.paths.root / "notes.txt"
+        source.write_text("one\n")
+        git("init", "-q")
+        git("add", "notes.txt")
+        old = "2026-01-01T00:00:00Z"
+        git("commit", "-q", "-m", "first", GIT_AUTHOR_DATE=old, GIT_COMMITTER_DATE=old)
+        agent = Artificium(self.paths, engine=FakeEngine([]), console=Console(quiet=True))
+        self.assertEqual(agent._artifact_events(), [])
+        source.write_text("two\n")
+        (self.paths.runtime / "tracked-artifacts.json").unlink()
+        events = agent._artifact_events()
+        self.assertEqual(len(events), 1)
+        self.assertIn("uncommitted changes", events[0])
+        self.assertIn("workspace repository", events[0])
+
     def test_self_revision_is_reflective_and_versioned(self) -> None:
         *_, tools = self.components()
         first = tools.revise_self(
@@ -1919,7 +1973,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertNotIn("mind/working_memory", prompt)
         self.assertIn("offload_working_memory", prompt)
         self.assertIn("schedule_task", prompt)
-        self.assertEqual("Artificium-revolution-1.10.10", agent.prompts.version)
+        self.assertEqual("Artificium-revolution-1.10.11", agent.prompts.version)
         self.assertIn("Harness Notifications", prompt)
         self.assertIn("complete meta-memory", prompt)
         self.assertIn("Compression is not a demand to minimize file size", prompt)

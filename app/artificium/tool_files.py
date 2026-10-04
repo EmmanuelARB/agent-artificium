@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .artifacts import ArtifactTracker
 from .filesystem import (
     atomic_write_text,
     backup_before_overwrite,
@@ -253,6 +254,17 @@ class FileToolsMixin:
                 "stdout": self._decode_shell_output(raw_stdout),
                 "stderr": self._decode_shell_output(raw_stderr),
             }
+
+    def track_artifact(
+        self,
+        path: str,
+        update_every_hours: float = 24,
+        note: str = "",
+        stop: bool = False,
+    ) -> dict[str, Any]:
+        return ArtifactTracker(self.paths, self.records).track(
+            self._resolve(path), update_every_hours, note, stop
+        )
 
     def load_images(
         self,

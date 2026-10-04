@@ -51,6 +51,18 @@ All tool paths are relative to the workspace root (durable memory lives under
 `mind/memory/...`, not `memory/...`); a not-found read names `mind/...` as a
 hint when that is where the file actually is.
 
+### `track_artifact`
+
+```json
+{"tool":"track_artifact","path":"PATH","update_every_hours":24,"note":"WHAT IT RECORDS","stop":false}
+```
+
+Registers a file you committed to keeping current (a progress log, a status
+report) or a Git repository. You are reminded when the file has not changed for
+that many hours, or when the repository has had uncommitted changes since a
+commit older than that. A workspace that is itself a Git repository is watched
+at 24 hours without registration. `stop:true` ends tracking.
+
 ### `run_shell`
 
 ```json

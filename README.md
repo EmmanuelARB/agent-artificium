@@ -275,6 +275,8 @@ The model decides what the checkpoint preserves. Archived context and durable in
 
 **Disk space.** When the filesystem holding the workspace falls under 10% free or 2 GiB, the agent gets a notice to find and remove what is reproducible, and to ask the operator before deleting what is not. The notice comes again only when free space halves again.
 
+**Tracked records.** `track_artifact` registers a file the agent committed to keeping current, such as a progress log, or a Git repository, with a period in hours. Every ten minutes at most, the runtime checks them. A file unchanged for longer than its period, or a repository with uncommitted changes whose last commit is older than its period, produces a reminder, repeated once per period while it lasts. A workspace that is itself a Git repository is watched at 24 hours without registration. State is kept in `logs/runtime/tracked-artifacts.json`.
+
 **Mandatory offloading**, on by default for new setups, adds a runtime gate at 80% of the target. At the threshold, or when generation needs the remaining context, ordinary actions and sleep are withheld until an offload succeeds. Memory preparation stays available, and the requirement survives restart. Context is never silently truncated.
 
 **Automatic repair**, also on by default for new setups, recovers from a rejected input or an empty answer by retrying from an earlier successful context, with up to three attempts per incident (see [Configuration](#complete-guide)).
@@ -731,7 +733,7 @@ These are model-facing tools, not CLI commands. The [tool contract](app/prompts/
 
 | Capability | Tools |
 |---|---|
-| Files and shell | `list_directory`, `read_file`, `write_file`, `run_shell` |
+| Files and shell | `list_directory`, `read_file`, `write_file`, `run_shell`, `track_artifact` |
 | Active images | `load_images`, `list_loaded_images`, `release_images` |
 | Durable memory | `save_memory`, `search_memory`, `remove_memory` |
 | Continuity and identity | `offload_working_memory`, `revise_self`, `finish_initialization`, `sleep` |

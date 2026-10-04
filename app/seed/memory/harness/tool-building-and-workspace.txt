@@ -96,6 +96,16 @@ Other combinations
 - A tool can schedule its own later verification by emitting or requesting a
   scheduled interaction rather than keeping the life-loop busy.
 
+Records and version control
+
+When a long project keeps a progress log, a status report, or a Git
+repository, register it with `track_artifact` and a realistic period. The
+harness reminds you when the record falls behind or changes sit uncommitted
+since an old commit; a workspace that is itself a repository is watched
+without registration. Commit in increments that each leave the project
+consistent, and keep hand edits out of generated files: regenerate them from
+their source, or the next regeneration silently discards the edits.
+
 Client contract
 
 Before building a chat UI, screen observer, sensor, or agent bridge, inspect the
