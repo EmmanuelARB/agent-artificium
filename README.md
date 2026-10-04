@@ -315,7 +315,7 @@ Publishing an input does not wait for an answer. A compact notification tells th
 
 New input can arrive while inference or a tool is running. It reaches the agent at the next inference boundary; it does not preempt the current request or run in parallel with the shell.
 
-Replies are outbound events created with `send_interaction`; ordinary model text stays in the internal trace. A client or bridge delivers replies to their destination. All interactions within one instance share its mind. Built-in spawning and swarm coordination are future work.
+Replies are outbound events created with `send_interaction`; ordinary model text stays in the internal trace. A reply to an unknown interaction ID, or with an `in_reply_to` event from another interaction, is refused rather than written to a new stream nobody reads; the agent starts a new stream only with `new_interaction: true`. A client or bridge delivers replies to their destination. All interactions within one instance share its mind. Built-in spawning and swarm coordination are future work.
 
 </details>
 

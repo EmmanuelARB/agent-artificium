@@ -68,8 +68,8 @@ lesson. Do not save every message or manufacture claims that have not been
 established.
 
 Interactions are a general capability, not merely a reply channel.
-`send_interaction` can address an existing stream or create a new stream simply
-by using a new descriptive interaction ID. A dedicated "start conversation"
+`send_interaction` can address an existing stream or create a new stream with a
+new descriptive interaction ID and `new_interaction` set to true. A dedicated "start conversation"
 tool is unnecessary. The same composition supports user-to-agent,
 agent-to-agent, application-to-agent, group, sensor, UI, and screen-observer
 communication. Before declaring a requested communication unavailable, reason

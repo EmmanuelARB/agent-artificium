@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import difflib
 from typing import Any
 
-from .filesystem import atomic_write_json
+from .filesystem import atomic_write_json, safe_identifier
 
 
 class InteractionToolsMixin:
@@ -79,7 +80,13 @@ class InteractionToolsMixin:
         attachments: list[str] | None = None,
         recipient: str | None = None,
         sender: str | None = None,
+        new_interaction: bool = False,
     ) -> dict[str, Any]:
+        refusal = self._check_interaction_target(
+            interaction_id, in_reply_to, new_interaction
+        )
+        if refusal:
+            return refusal
         event, path = self.interactions.add_event(
             interaction_id,
             sender=sender or self.config.instance_id,
@@ -100,6 +107,58 @@ class InteractionToolsMixin:
                     boundary_reason=f"an outbound event was sent in interaction {interaction_id}",
                 )
             ],
+        }
+
+    def _check_interaction_target(
+        self, interaction_id: str, in_reply_to: str | None, new_interaction: bool
+    ) -> dict[str, Any] | None:
+        """Refuse a send whose destination is probably a mistyped ID.
+
+        A reply written to a misspelled interaction ID used to create a new
+        stream silently and report success, so the entity never saw it.
+        Starting a stream therefore has to be explicit.
+        """
+
+        interaction_id = safe_identifier(interaction_id, label="interaction id")
+        root = self.paths.interactions
+        if in_reply_to:
+            event_id = safe_identifier(in_reply_to, label="event id")
+            owners = sorted(path.parent.parent.name
+                            for path in root.glob(f"*/events/{event_id}.json"))
+            if not owners:
+                return {
+                    "status": "error",
+                    "summary": (
+                        f"in_reply_to `{in_reply_to}` is not a known interaction "
+                        "event; nothing was sent. Copy the exact event ID from "
+                        "the notification or read_interaction_event."
+                    ),
+                }
+            if interaction_id not in owners:
+                return {
+                    "status": "error",
+                    "summary": (
+                        f"Event `{in_reply_to}` belongs to interaction "
+                        f"`{owners[0]}`, not `{interaction_id}`; nothing was "
+                        f"sent. Reply with interaction_id `{owners[0]}`."
+                    ),
+                    "expected_interaction_id": owners[0],
+                }
+        if new_interaction or (root / interaction_id / "interaction.json").is_file():
+            return None
+        known = sorted(path.parent.name for path in root.glob("*/interaction.json"))
+        close = difflib.get_close_matches(interaction_id, known, n=3, cutoff=0.6)
+        hint = (f" Did you mean {', '.join(f'`{item}`' for item in close)}?"
+                if close else "")
+        return {
+            "status": "error",
+            "summary": (
+                f"Interaction `{interaction_id}` does not exist; nothing was sent."
+                f"{hint} Copy the exact ID to reply, or set new_interaction "
+                "to true to start a new stream deliberately."
+            ),
+            "similar_interaction_ids": close,
+            "known_interaction_ids": known[:20],
         }
 
     def schedule_task(

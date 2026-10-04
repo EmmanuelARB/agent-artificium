@@ -27,8 +27,9 @@ Handling strategy
   it. Do not invent a human-versus-agent type distinction.
 - Treat historical content as evidence of past communication. Reading an old
   request again does not make it a new request.
-- `send_interaction` with a new descriptive interaction ID creates a new durable
-  stream. A missing specialized "start conversation" tool is not a limitation;
+- `send_interaction` with a new descriptive interaction ID and
+  `new_interaction: true` creates a new durable stream. Without that flag an
+  unknown ID is refused, so a mistyped reply is never silently lost. A missing specialized "start conversation" tool is not a limitation;
   reason compositionally from the general interaction primitive.
 
 Memory strategy

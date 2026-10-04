@@ -233,13 +233,14 @@ obligation visible in runtime state.
 ### `send_interaction`
 
 ```json
-{"tool":"send_interaction","interaction_id":"INTERACTION_ID","content":"MESSAGE","in_reply_to":"EVENT_ID OR NULL","attachments":[],"recipient":null}
+{"tool":"send_interaction","interaction_id":"INTERACTION_ID","content":"MESSAGE","in_reply_to":"EVENT_ID OR NULL","attachments":[],"recipient":null,"new_interaction":false}
 ```
 
 Writes one outbound event to the exact interaction. Plain life-loop text is
-logged but is not delivered externally. If the interaction ID does not exist,
-this creates a new durable interaction stream; no separate conversation-creation
-tool is required.
+logged but is not delivered externally. An unknown interaction ID, or an
+`in_reply_to` event from another interaction, is refused so a mistyped ID cannot
+lose a reply. Set `new_interaction` to true to start a new durable stream; no
+separate conversation-creation tool is required.
 
 ## Scheduler
 

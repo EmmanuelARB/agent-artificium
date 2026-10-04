@@ -339,7 +339,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(captured["url"], "http://127.0.0.1:11434/api/chat")
         self.assertNotIn("authorization", captured["headers"])
         self.assertEqual(
-            captured["headers"]["user-agent"], "Artificium-revolution/1.10.5"
+            captured["headers"]["user-agent"], "Artificium-revolution/1.10.6"
         )
         self.assertEqual(captured["payload"]["options"]["num_ctx"], 32_768)
         self.assertIs(captured["payload"]["think"], False)
@@ -1245,7 +1245,7 @@ class RevolutionCase(unittest.TestCase):
         request_headers = {key.lower(): value for key, value in request.headers.items()}
         self.assertNotIn("authorization", request_headers)
         self.assertEqual(
-            request_headers["user-agent"], "Artificium-revolution/1.10.5"
+            request_headers["user-agent"], "Artificium-revolution/1.10.6"
         )
         self.assertEqual(opened.call_args.kwargs["timeout"], 0.25)
 
@@ -1469,6 +1469,37 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(event["recipient"], "artificium")
         result = client.interactions.read_event(event["id"])
         self.assertEqual(result["event"]["content"], "private body")
+
+    def test_send_interaction_refuses_a_mistyped_destination(self) -> None:
+        *_, tools = self.components()
+        event, _ = ArtificiumClient(self.root).send(
+            "chat-c6c631a003b0", sender="entity_1", content="Progress?"
+        )
+        result = tools.send_interaction("chat-c6c631a03b0", "Status report.")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("chat-c6c631a003b0", result["similar_interaction_ids"])
+        self.assertFalse((self.paths.interactions / "chat-c6c631a03b0").exists())
+
+        result = tools.send_interaction(
+            "chat-c6c631a003b0", "Status report.", in_reply_to="event_missing"
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(len(ArtificiumClient(self.root).events("chat-c6c631a003b0")), 1)
+
+        tools.send_interaction("side-room", "Hello.", new_interaction=True)
+        result = tools.send_interaction(
+            "side-room", "Status report.", in_reply_to=event["id"]
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["expected_interaction_id"], "chat-c6c631a003b0")
+        self.assertEqual(len(ArtificiumClient(self.root).events("side-room")), 1)
+
+        result = tools.send_interaction(
+            "chat-c6c631a003b0", "Status report.", in_reply_to=event["id"]
+        )
+        self.assertEqual(result["status"], "sent")
+        receipt = read_json(self.paths.receipts / f"{event['id']}.json")
+        self.assertEqual(receipt["reply_event_id"], result["event"]["id"])
 
     def test_external_file_writer_is_reconciled(self) -> None:
         notifications, interactions, *_ = self.components()
@@ -1718,7 +1749,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertNotIn("mind/working_memory", prompt)
         self.assertIn("offload_working_memory", prompt)
         self.assertIn("schedule_task", prompt)
-        self.assertEqual("Artificium-revolution-1.10.5", agent.prompts.version)
+        self.assertEqual("Artificium-revolution-1.10.6", agent.prompts.version)
         self.assertIn("Harness Notifications", prompt)
         self.assertIn("complete meta-memory", prompt)
         self.assertIn("Compression is not a demand to minimize file size", prompt)
