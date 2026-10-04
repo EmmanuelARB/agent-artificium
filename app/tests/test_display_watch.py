@@ -200,6 +200,27 @@ class RenderingCase(unittest.TestCase):
             _print_life_record(json.dumps(record))
         self.assertIn("[guidance] meta_memory_size", output.getvalue())
 
+    def test_sleep_ended_shows_the_events_that_woke_the_agent(self) -> None:
+        record = {
+            "kind": "sleep_ended", "timestamp": _iso(3 * 3600 + 120),
+            "sleep_started_at": _iso(), "reason": "new_event", "mode": "until_event",
+            "wake_events": [
+                {"type": "interaction_event", "source": "user_1", "event_kind": "message",
+                 "interaction_id": "chat-1", "preview": "How far along are we?"},
+                {"type": "interaction_event", "source": "scheduler",
+                 "event_kind": "scheduled_task", "interaction_id": "scheduler",
+                 "preview": "Check whether the build finished."},
+            ],
+        }
+        lines = display.render_record_lines(record, self.options)
+        self.assertIn("[wake] woken by 2 event(s) after 3h02m asleep:", lines[0])
+        self.assertIn("message from user_1 in chat-1: How far along are we?", lines[1])
+        self.assertIn("scheduled_task from scheduler", lines[2])
+        timer = display.render_event_body(
+            {"kind": "sleep_ended", "timestamp": _iso(600), "sleep_started_at": _iso(),
+             "reason": "timer"}, self.options)
+        self.assertEqual(timer, ["[wake] timer after 10m00s asleep"])
+
     def test_tool_call_shows_command_for_run_shell(self) -> None:
         record = {"kind": "tool_call", "timestamp": _iso(), "name": "run_shell", "arguments": {"command": "ls -la"}}
         lines = display.render_record_lines(record, self.options)

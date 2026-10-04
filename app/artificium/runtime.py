@@ -1320,7 +1320,12 @@ class Artificium:
         woke = utc_now()
         state.update({"active": False, "woke_at": woke, "reason": reason})
         atomic_write_json(self.paths.sleep_state, state)
-        self.records.emit("sleep_ended", reason=reason)
+        wake_events = self._waking_events() if reason == "new_event" else []
+        self.records.emit("sleep_ended", reason=reason, wake_events=wake_events)
+        self.records.life(
+            "sleep_ended", reason=reason, mode=state.get("mode"),
+            sleep_started_at=state.get("started_at"), wake_events=wake_events,
+        )
         self.notifications.create(
             type="wake",
             source="artificium_runtime",
@@ -1332,6 +1337,39 @@ class Artificium:
             },
         )
         return False
+
+    def _waking_events(self, limit: int = 3) -> list[dict[str, Any]]:
+        """What ended an until-event sleep, for the operator's watch view.
+
+        Peeks at the unclaimed notification queue without claiming it; an
+        interaction event gets a short preview of its content.
+        """
+        found: list[dict[str, Any]] = []
+        for source in sorted(self.paths.notifications_new.glob("*.json")):
+            value = read_json(source, {})
+            if not isinstance(value, dict) or not value.get("type"):
+                continue
+            item = Notification.from_dict(value)
+            if item.is_runtime_notice:
+                continue
+            metadata = item.metadata
+            preview = None
+            if item.path:
+                event = read_json(self.paths.root / item.path, {})
+                if isinstance(event, dict) and event.get("content"):
+                    preview = " ".join(str(event["content"]).split())[:300]
+            found.append({
+                "type": item.type,
+                "source": item.source,
+                "summary": item.summary,
+                "interaction_id": metadata.get("interaction_id"),
+                "event_id": metadata.get("event_id"),
+                "event_kind": metadata.get("event_kind"),
+                "preview": preview,
+            })
+            if len(found) >= limit:
+                break
+        return found
 
     def _observe_no_action(self, content: str) -> tuple[int, bool]:
         path = self.paths.runtime / "no-action.json"

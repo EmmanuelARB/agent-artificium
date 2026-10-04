@@ -2404,6 +2404,22 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(summary["features"]["memory"], memory_before + 1)
         self.assertTrue(self.paths.feature_log("infinite-attention").is_file())
 
+    def test_sleep_ended_records_the_event_that_woke_it(self) -> None:
+        agent = Artificium(self.paths, engine=FakeEngine([]), console=Console(quiet=True))
+        atomic_write_json(self.paths.sleep_state, {
+            "active": True, "mode": "until_event", "seconds": None,
+            "started_at": "2026-01-01T00:00:00Z", "wake_at_epoch": None,
+        })
+        self.assertTrue(agent._sleep_active())
+        ArtificiumClient(self.root).send("chat-1", sender="user_1", content="How far   along?")
+        self.assertFalse(agent._sleep_active())
+        ended = [json.loads(line) for line in self.paths.life_loop_log.read_text().splitlines()
+                 if '"sleep_ended"' in line][-1]
+        self.assertEqual(ended["reason"], "new_event")
+        self.assertEqual(ended["wake_events"][0]["source"], "user_1")
+        self.assertEqual(ended["wake_events"][0]["interaction_id"], "chat-1")
+        self.assertEqual(ended["wake_events"][0]["preview"], "How far along?")
+
     def test_runtime_reads_event_replies_and_sleeps(self) -> None:
         event, _ = ArtificiumClient(self.root).send(
             "room-1", sender="entity_1", content="Say hello."

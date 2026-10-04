@@ -612,10 +612,40 @@ def render_request_repair(record, options, session=None):
     return [f"[recovery] {suffix}: {detail}"]
 
 
+def _fmt_sleep(seconds: float) -> str:
+    hours, rest = divmod(int(round(seconds)), 3600)
+    return f"{hours}h{rest // 60:02d}m" if hours else _fmt_duration_long(rest)
+
+
+def render_sleep_ended(record, options, session=None):
+    reason = str(record.get("reason") or "unknown")
+    asleep = ""
+    started = _parse_timestamp(record.get("sleep_started_at"))
+    ended = _parse_timestamp(record.get("timestamp"))
+    if started and ended:
+        asleep = f" after {_fmt_sleep(max(0.0, (ended - started).total_seconds()))} asleep"
+    wake_events = record.get("wake_events")
+    if reason != "new_event" or not isinstance(wake_events, list) or not wake_events:
+        return [f"[wake] {reason}{asleep}"]
+    lines = [f"[wake] woken by {len(wake_events)} event(s){asleep}:"]
+    limit = max(20, options.width - 24)
+    for item in wake_events:
+        if not isinstance(item, dict):
+            continue
+        where = f" in {item['interaction_id']}" if item.get("interaction_id") else ""
+        kind = item.get("event_kind") or item.get("type") or "event"
+        text = item.get("preview") or item.get("summary") or ""
+        if len(text) > limit:
+            text = text[:limit].rstrip() + "…"
+        lines.append(f"  {kind} from {item.get('source')}{where}: {text}")
+    return lines
+
+
 _RENDERERS: dict[str, Callable[[dict, RenderOptions, "WatchSession | None"], list[str] | None]] = {
     events.KIND_TURN_STARTED: render_turn_started,
     events.KIND_TURN_COMPLETED: render_turn_completed,
     events.KIND_TURN_INTERRUPTED: render_turn_interrupted,
+    events.KIND_SLEEP_ENDED: render_sleep_ended,
     events.KIND_CONTEXT_USAGE: render_context_usage,
     events.KIND_CONTEXT_COMPACTED: render_memory_event,
     events.KIND_ENGINE_REQUEST: render_engine_request,
