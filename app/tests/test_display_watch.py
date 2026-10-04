@@ -200,6 +200,23 @@ class RenderingCase(unittest.TestCase):
             _print_life_record(json.dumps(record))
         self.assertIn("[guidance] meta_memory_size", output.getvalue())
 
+    def test_sleep_started_shows_what_the_agent_waits_for(self) -> None:
+        record = {
+            "kind": "sleep_started", "timestamp": _iso(), "mode": "until_event",
+            "upcoming_tasks": [{"name": "check-build", "run_at": _iso(3600 + 300),
+                                "description": "See whether the build finished."}],
+        }
+        lines = display.render_event_body(record, self.options)
+        due = dt.datetime.fromisoformat(_iso(3900).replace("Z", "+00:00")).astimezone()
+        self.assertEqual(lines[0], "[sleep] until an event; next scheduled task(s), or any new message:")
+        self.assertTrue(lines[1].startswith(
+            f"  check-build at {due:%Y-%m-%d %H:%M:%S} (in 1h05m) — See whether"
+        ), lines[1])
+        bare = dict(record, upcoming_tasks=[])
+        self.assertIn("no task scheduled", display.render_event_body(bare, self.options)[0])
+        timed = {"kind": "sleep_started", "timestamp": _iso(), "mode": "timed", "seconds": 600}
+        self.assertTrue(display.render_event_body(timed, self.options)[0].startswith("[sleep] timed, 10m00s, until "))
+
     def test_sleep_ended_shows_the_events_that_woke_the_agent(self) -> None:
         record = {
             "kind": "sleep_ended", "timestamp": _iso(3 * 3600 + 120),

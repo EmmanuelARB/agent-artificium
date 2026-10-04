@@ -2456,6 +2456,9 @@ class RevolutionCase(unittest.TestCase):
         events = ArtificiumClient(self.root).events("room-1")
         self.assertEqual(events[-1]["content"], "Hello.")
         self.assertTrue(read_json(self.paths.sleep_state)["active"])
+        started = [json.loads(line) for line in self.paths.life_loop_log.read_text().splitlines()
+                   if '"sleep_started"' in line][-1]
+        self.assertEqual((started["mode"], started["upcoming_tasks"]), ("until_event", []))
         first_request = json.dumps(engine.requests[0])
         self.assertNotIn("Say hello.", first_request)
         self.assertIn(event["id"], first_request)

@@ -638,7 +638,7 @@ Continuous `run` and background `start` have no turn-count or turn-duration limi
 
 ### Watching the life-loop
 
-`watch` renders the same view as a foreground `run`, with local timestamps, and survives log rotation. When a sleep ends, a `[wake]` line says why: the timer, or the events that woke the agent, each with its kind, sender, interaction, and the start of its content. Useful options:
+`watch` renders the same view as a foreground `run`, with local timestamps, and survives log rotation. When the agent goes to sleep, a `[sleep]` line says what it waits for: the wake time of a timed sleep, or, for a sleep until an event, its next scheduled tasks with their due times (any new message also wakes it). When a sleep ends, a `[wake]` line says why: the timer, or the events that woke the agent, each with its kind, sender, interaction, and the start of its content. Useful options:
 
 | Option | Effect |
 |---|---|

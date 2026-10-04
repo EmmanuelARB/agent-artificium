@@ -1292,8 +1292,28 @@ class Artificium:
                 "wake_at_epoch": wake_at,
             },
         )
-        self.records.emit("sleep_started", mode=request.mode, seconds=request.seconds)
+        upcoming = self._upcoming_tasks()
+        self.records.emit("sleep_started", mode=request.mode, seconds=request.seconds,
+                          upcoming_tasks=upcoming)
+        self.records.life("sleep_started", mode=request.mode, seconds=request.seconds,
+                          upcoming_tasks=upcoming)
         self.tools.sleep_request = None
+
+    def _upcoming_tasks(self, limit: int = 3) -> list[dict[str, Any]]:
+        """The scheduled tasks most likely to end a sleep, for watch.
+
+        The scheduler lives in the agent-editable mind, so a changed or
+        broken one only costs this preview.
+        """
+        try:
+            tasks = self.scheduler.list(status="pending", limit=limit)["tasks"]
+        except Exception:
+            return []
+        return [
+            {"name": task.get("name"), "run_at": task.get("run_at"),
+             "description": task.get("description")}
+            for task in tasks if isinstance(task, dict)
+        ]
 
     def _sleep_active(self) -> bool:
         state = read_json(self.paths.sleep_state, {})

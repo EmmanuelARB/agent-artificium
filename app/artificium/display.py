@@ -617,6 +617,36 @@ def _fmt_sleep(seconds: float) -> str:
     return f"{hours}h{rest // 60:02d}m" if hours else _fmt_duration_long(rest)
 
 
+def render_sleep_started(record, options, session=None):
+    started = _parse_timestamp(record.get("timestamp"))
+    if record.get("mode") == "timed":
+        seconds = _num(record.get("seconds"))
+        until = ""
+        if started:
+            until = f", until {local_time((started + dt.timedelta(seconds=seconds)).isoformat())}"
+        return [f"[sleep] timed, {_fmt_sleep(seconds)}{until}"]
+    tasks = [item for item in record.get("upcoming_tasks") or [] if isinstance(item, dict)]
+    if not tasks:
+        return ["[sleep] until an event: no task scheduled, only a new message or notification"]
+    lines = ["[sleep] until an event; next scheduled task(s), or any new message:"]
+    limit = max(20, options.width - 24)
+    for item in tasks:
+        due = _parse_timestamp(item.get("run_at"))
+        when = str(item.get("run_at") or "?")
+        if due:
+            when = due.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            if started:
+                ahead = (due - started).total_seconds()
+                when += f" (in {_fmt_sleep(ahead)})" if ahead >= 0 else " (overdue)"
+        text = f"{item.get('name')} at {when}"
+        if item.get("description"):
+            text += f" — {item['description']}"
+        if len(text) > limit:
+            text = text[:limit].rstrip() + "…"
+        lines.append(f"  {text}")
+    return lines
+
+
 def render_sleep_ended(record, options, session=None):
     reason = str(record.get("reason") or "unknown")
     asleep = ""
@@ -645,6 +675,7 @@ _RENDERERS: dict[str, Callable[[dict, RenderOptions, "WatchSession | None"], lis
     events.KIND_TURN_STARTED: render_turn_started,
     events.KIND_TURN_COMPLETED: render_turn_completed,
     events.KIND_TURN_INTERRUPTED: render_turn_interrupted,
+    events.KIND_SLEEP_STARTED: render_sleep_started,
     events.KIND_SLEEP_ENDED: render_sleep_ended,
     events.KIND_CONTEXT_USAGE: render_context_usage,
     events.KIND_CONTEXT_COMPACTED: render_memory_event,
