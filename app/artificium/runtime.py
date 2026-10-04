@@ -144,6 +144,7 @@ class Artificium:
             initialization=self.initialization,
             scheduler=self.scheduler,
         )
+        self.tools.reviewer = self._review
         if not self.config.mandatory_offload:
             control = self._tools_control()
             if control.pop("mandatory_offload_pending", None):
@@ -872,6 +873,15 @@ class Artificium:
             + format_throughput(throughput),
         )
         return request_id, reply
+
+    def _review(self, messages: list[dict[str, Any]]) -> tuple[str, str]:
+        """One fresh-context request for request_review.
+
+        It goes through _complete like any inference, so it is budgeted,
+        logged, and counted, but it shares none of the working memory.
+        """
+        request_id, reply = self._complete(messages, wake_reason="review")
+        return request_id, reply.content
 
     def _append_runtime(self, records: list[str], *, origin: str) -> None:
         if not records:

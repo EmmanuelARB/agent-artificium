@@ -192,6 +192,18 @@ Do not wait for context exhaustion. When a completed task or resolved
 interaction no longer contributes useful live detail, offloading can reduce
 cost and interference while retaining its lessons and continuation state.
 
+### `request_review`
+
+```json
+{"tool":"request_review","claim":"CLAIM AND THE REASONING BEHIND IT","evidence_paths":["PATH"],"constraints":"REQUIREMENTS THE WORK MUST RESPECT"}
+```
+
+Sends the claim, the evidence files, the constraints, and the standing
+directives to the model in a fresh context that shares none of your working
+memory. The reviewer looks for the strongest reasons the claim could be false.
+Use it before building on a diagnosis or calling a result verified. It costs one
+inference, and its verdict is evidence to weigh, not authority.
+
 ### `revise_self`
 
 ```json

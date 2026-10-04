@@ -339,7 +339,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(captured["url"], "http://127.0.0.1:11434/api/chat")
         self.assertNotIn("authorization", captured["headers"])
         self.assertEqual(
-            captured["headers"]["user-agent"], "Artificium-revolution/1.10.8"
+            captured["headers"]["user-agent"], "Artificium-revolution/1.10.9"
         )
         self.assertEqual(captured["payload"]["options"]["num_ctx"], 32_768)
         self.assertIs(captured["payload"]["think"], False)
@@ -1245,7 +1245,7 @@ class RevolutionCase(unittest.TestCase):
         request_headers = {key.lower(): value for key, value in request.headers.items()}
         self.assertNotIn("authorization", request_headers)
         self.assertEqual(
-            request_headers["user-agent"], "Artificium-revolution/1.10.8"
+            request_headers["user-agent"], "Artificium-revolution/1.10.9"
         )
         self.assertEqual(opened.call_args.kwargs["timeout"], 0.25)
 
@@ -1535,6 +1535,41 @@ class RevolutionCase(unittest.TestCase):
         lifted, _ = client.send("room-1", sender="entity_1", content="Synthetic data is fine now.")
         self.assertEqual(tools.retire_directive("D1", lifted["id"])["status"], "retired")
         self.assertNotIn("STANDING DIRECTIVES", agent.system_prompt())
+
+    def test_request_review_runs_in_a_fresh_context(self) -> None:
+        *_, tools = self.components()
+        self.assertEqual(tools.request_review("The cache is never stale.")["status"], "error")
+
+        rule, _ = ArtificiumClient(self.root).send(
+            "room-1", sender="entity_1", content="Never edit generated files by hand."
+        )
+        tools.record_directive(rule["id"], "Never edit generated files by hand.")
+        evidence = self.paths.space / "trace.txt"
+        evidence.parent.mkdir(parents=True, exist_ok=True)
+        evidence.write_text("step 41 ok\nstep 42 wrote 0 to the return slot\n")
+        engine = FakeEngine([
+            "<think>Weighing it.</think>VERDICT: doubtful\nREASONS: 1. step 42",
+        ])
+        agent = Artificium(self.paths, engine=engine, console=Console(quiet=True))
+        agent.working.append(
+            {"role": "assistant", "content": "PRIVATE WORKING DETAIL"}, origin="test"
+        )
+        result = agent.tools.request_review(
+            "The return slot is overwritten by the caller, not the callee.",
+            evidence_paths=[str(evidence)],
+            constraints="Fixes must be made in the generator.",
+        )
+        self.assertEqual(result["status"], "reviewed")
+        self.assertEqual(result["review"], "VERDICT: doubtful\nREASONS: 1. step 42")
+        sent = json.dumps(engine.requests[-1])
+        self.assertIn("independent reviewer", sent)
+        self.assertIn("step 42 wrote 0", sent)
+        self.assertIn("Fixes must be made in the generator.", sent)
+        self.assertIn("Never edit generated files by hand.", sent)
+        self.assertNotIn("PRIVATE WORKING DETAIL", sent)
+        with self.assertRaises(FileNotFoundError):
+            agent.tools.request_review("The trace proves the caller is wrong.",
+                                       evidence_paths=["missing.txt"])
 
     def test_external_file_writer_is_reconciled(self) -> None:
         notifications, interactions, *_ = self.components()
@@ -1830,7 +1865,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertNotIn("mind/working_memory", prompt)
         self.assertIn("offload_working_memory", prompt)
         self.assertIn("schedule_task", prompt)
-        self.assertEqual("Artificium-revolution-1.10.8", agent.prompts.version)
+        self.assertEqual("Artificium-revolution-1.10.9", agent.prompts.version)
         self.assertIn("Harness Notifications", prompt)
         self.assertIn("complete meta-memory", prompt)
         self.assertIn("Compression is not a demand to minimize file size", prompt)

@@ -27,6 +27,7 @@ from .tool_attention import AttentionToolsMixin
 from .tool_files import FileToolsMixin
 from .tool_interactions import InteractionToolsMixin
 from .tool_memory import MemoryToolsMixin
+from .tool_review import ReviewToolsMixin
 from .vision import VisualContext
 
 
@@ -51,6 +52,7 @@ class ToolRegistry(
     MemoryToolsMixin,
     InteractionToolsMixin,
     AttentionToolsMixin,
+    ReviewToolsMixin,
 ):
     """Provider-neutral tools used only through Artificium's textual protocol.
 
@@ -131,6 +133,12 @@ class ToolRegistry(
             "tool": "retire_directive",
             "directive_id": "D1",
             "event_id": "LATER_EVENT_ID",
+        },
+        "request_review": {
+            "tool": "request_review",
+            "claim": "CLAIM_AND_THE_REASONING_BEHIND_IT",
+            "evidence_paths": ["PATH"],
+            "constraints": "REQUIREMENTS_THE_WORK_MUST_RESPECT",
         },
         "schedule_task": {
             "tool": "schedule_task",
@@ -217,6 +225,8 @@ class ToolRegistry(
         self.initialization = initialization
         self.scheduler = scheduler
         self.sleep_request: SleepRequest | None = None
+        # Set by the runtime to a callable(messages) -> (request_id, text).
+        self.reviewer: Callable[[list[dict[str, Any]]], tuple[str, str]] | None = None
         self.control_path = self.paths.runtime / "life-loop-control.json"
         self._functions: dict[str, Callable[..., dict[str, Any]]] = {
             "list_directory": self.list_directory,
@@ -256,7 +266,7 @@ class ToolRegistry(
         # Tools added after a mixin was first shipped: a workspace overlay of
         # that mixin written against an older release may lack them, and the
         # registry must still start.
-        for name in ("record_directive", "retire_directive"):
+        for name in ("record_directive", "retire_directive", "request_review"):
             method = getattr(self, name, None)
             if callable(method):
                 self._functions[name] = method

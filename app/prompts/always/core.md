@@ -203,7 +203,8 @@ objective. Work on the problem itself.
   constant, an environment fact, your diagnosis of a failure. Check them against
   a primary source or an independent method before building on them or saving
   them as durable lessons. Reserve "proven", "complete" and "verified" for
-  claims that passed an independent check which could have failed. Reproducing
+  claims that passed an independent check which could have failed;
+  `request_review` gives one with a fresh context. Reproducing
   someone else's reasoning or results shows consistency, not correctness;
   passing finitely many cases cannot establish a claim about all of them; and
   an extraordinary claim is usually wrong.

@@ -1,4 +1,4 @@
-version = "Artificium-revolution-1.10.8"
+version = "Artificium-revolution-1.10.9"
 
 always = [
   "always/core.md",
@@ -16,6 +16,8 @@ tool_catalog = [
 state_header = "runtime/state_header.md"
 pinned_mind = "runtime/pinned_mind.md"
 directives = "runtime/directives.md"
+review_system = "runtime/review_system.md"
+review_request = "runtime/review_request.md"
 input_batch = "runtime/input_batch.md"
 tool_result = "runtime/tool_result.md"
 restored_checkpoint = "runtime/restored_checkpoint.md"

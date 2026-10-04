@@ -733,10 +733,13 @@ These are model-facing tools, not CLI commands. The [tool contract](app/prompts/
 | Continuity and identity | `offload_working_memory`, `revise_self`, `finish_initialization`, `sleep` |
 | Interactions | `list_interactions`, `read_interaction_event`, `set_interaction_event_status`, `send_interaction` |
 | Standing directives | `record_directive`, `retire_directive` |
+| Independent review | `request_review` |
 | Scheduling | `schedule_task`, `list_scheduled_tasks`, `cancel_scheduled_task` |
 | Infinite Attention | `open_attention`, `checkpoint_attention`, `next_attention_chunk`, `refine_attention`, `complete_attention`, `list_attention_streams` |
 
 A directive is a lasting instruction from an entity, stored as its exact words from the cited inbound event (a paraphrase is refused) in `logs/runtime/directives.json`. Active directives are shown after the pinned mind on every request, and only a later event from the same entity can retire one. The block is absent while there are none.
+
+`request_review` sends a claim, the evidence files the agent names, its stated constraints, and the active directives to the same model in a fresh context that contains none of the working memory. The reviewer answers with a verdict, the strongest reasons for doubt, and the cheapest check that would settle them. Each review is one ordinary, logged inference; it is withheld while a mandatory offload is pending.
 
 `load_attachment` and `compact_context` remain as compatibility operations; `load_images`, text reads, and `offload_working_memory` replace them.
 

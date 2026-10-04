@@ -18,6 +18,7 @@ back before the next one:
 3. Name the cheapest test that would refute the leading unchecked assumption,
    and run it before another fix of the same kind.
 
-Consider asking the entity that set the objective: they may hold context, a
+`request_review` gives a fresh-context check of the leading assumption with
+the evidence you choose. Consider also asking the entity that set the objective: they may hold context, a
 reference, or a decision that only they can provide. If the step-back confirms
 the approach, record why in your next checkpoint and continue.
