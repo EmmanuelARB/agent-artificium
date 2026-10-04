@@ -21,10 +21,12 @@ from .interactions import ArtificiumClient
 
 
 def _local_time(value: Any) -> str:
+    # A conversation spans days and its history is replayed on reconnect, so
+    # a time without its date is ambiguous.
     raw = str(value or "")
     try:
         parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        return parsed.astimezone().strftime("%H:%M:%S")
+        return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S")
     except ValueError:
         return raw
 

@@ -340,7 +340,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(captured["url"], "http://127.0.0.1:11434/api/chat")
         self.assertNotIn("authorization", captured["headers"])
         self.assertEqual(
-            captured["headers"]["user-agent"], "Artificium-revolution/1.10.11"
+            captured["headers"]["user-agent"], "Artificium-revolution/1.10.12"
         )
         self.assertEqual(captured["payload"]["options"]["num_ctx"], 32_768)
         self.assertIs(captured["payload"]["think"], False)
@@ -1250,7 +1250,7 @@ class RevolutionCase(unittest.TestCase):
         request_headers = {key.lower(): value for key, value in request.headers.items()}
         self.assertNotIn("authorization", request_headers)
         self.assertEqual(
-            request_headers["user-agent"], "Artificium-revolution/1.10.11"
+            request_headers["user-agent"], "Artificium-revolution/1.10.12"
         )
         self.assertEqual(opened.call_args.kwargs["timeout"], 0.25)
 
@@ -1973,7 +1973,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertNotIn("mind/working_memory", prompt)
         self.assertIn("offload_working_memory", prompt)
         self.assertIn("schedule_task", prompt)
-        self.assertEqual("Artificium-revolution-1.10.11", agent.prompts.version)
+        self.assertEqual("Artificium-revolution-1.10.12", agent.prompts.version)
         self.assertIn("Harness Notifications", prompt)
         self.assertIn("complete meta-memory", prompt)
         self.assertIn("Compression is not a demand to minimize file size", prompt)
@@ -2029,6 +2029,16 @@ class RevolutionCase(unittest.TestCase):
         with redirect_stdout(rendered):
             _print_life_record(json.dumps(guidance[0]))
         self.assertIn("[guidance] meta_memory_size", rendered.getvalue())
+
+    def test_terminal_chat_shows_the_date_of_each_event(self) -> None:
+        from artificium.cli_chat import _print_event
+
+        created = "2026-03-14T09:26:53Z"
+        local = dt.datetime(2026, 3, 14, 9, 26, 53, tzinfo=dt.timezone.utc).astimezone()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            _print_event({"sender": "entity_1", "created_at": created, "content": "Hi."})
+        self.assertIn(f"[{local:%Y-%m-%d %H:%M:%S}] entity_1", output.getvalue())
 
     def test_terminal_chat_restores_canonical_prompt_and_draft(self) -> None:
         class ReadlineStub:
