@@ -884,7 +884,7 @@ Installations older than that layout have no migration path; start a new one.
 python3 -m unittest discover -s app/tests -q
 ```
 
-The starting mind is `app/seed/`, laid out one-to-one onto `workspace/mind/`: `self.txt`, `meta_memory.md`, `memory/harness/*.txt`, `memory/tools/*.txt`, and `tools/` (scheduler and search). Edit those files to change what a fresh agent starts with. The version is set in `app/artificium/version.py`. A release is a Git tag; `git archive` or GitHub's source download packages it, and never includes the ignored instance files.
+The starting mind is `app/seed/`, laid out one-to-one onto `workspace/mind/`: `self.txt`, `meta_memory.md`, `memory/harness/*.txt`, `memory/tools/*.txt`, and `tools/` (scheduler and search). Edit those files to change what a fresh agent starts with. The version is set once, in `app/prompts/manifest.toml`; `app/artificium/version.py` reads it from there. A release is a Git tag; `git archive` or GitHub's source download packages it, and never includes the ignored instance files.
 
 Offline tests cover runtime mechanics and request contracts. Evaluate model performance and continual improvement separately, with stated tasks, models, budgets, and success criteria.
 

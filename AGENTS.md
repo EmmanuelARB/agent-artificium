@@ -46,7 +46,7 @@ writes). Never commit them, and never read or print `.secrets.json`.
 | CLI | `cli.py`, `cli_admin.py`, `cli_chat.py`, `cli_service.py`, `cli_watch.py`, `display.py`, `operator.py` |
 | Code overlays | `_bootstrap.py`, `__init__.py` |
 | Upgrade | `upgrade.py` (guarded `git pull`; moves a clone of the original project to this fork, `REPOSITORY_URL`) |
-| Version | `version.py` (the only place the application version is written) |
+| Version | `version.py` (reads the release from `app/prompts/manifest.toml`) |
 
 ## Core mechanisms to understand before changing them
 
@@ -153,13 +153,13 @@ cd app && python3 -m unittest tests.test_file_safety     # one module
 
 ## Versioning
 
-The application version (`RELEASE` in `app/artificium/version.py`) and the
-prompt pack version (`version` in `app/prompts/manifest.toml`, of the form
-`Artificium-<codename>-<release>`) are kept **in step**: any release bumps
-both to the same number. Bump for every change to prompts or harness
+The application and the prompt pack share one version, written in one
+place: `version = "Artificium-<codename>-<release>"` in
+`app/prompts/manifest.toml`. `app/artificium/version.py` derives `RELEASE`,
+`CODENAME`, `VERSION`, and the User-Agent from it, and tests compare against
+those names, never a literal. Bump for every change to prompts or harness
 behavior that instances would run with, so runs can be told apart in their
-logs (`prompt_pack_loaded` records the pack version). Tests that assert the
-version or User-Agent string must be updated with it; the overlay baseline
+logs (`prompt_pack_loaded` records the pack version). The overlay baseline
 fixtures keep their historical versions.
 
 ## Git
