@@ -1,6 +1,6 @@
 """The one place the application version is written."""
 
-RELEASE = "1.10.6"
+RELEASE = "1.10.7"
 CODENAME = "revolution"
 VERSION = f"{RELEASE}-{CODENAME}"
 USER_AGENT = f"Artificium-{CODENAME}/{RELEASE}"

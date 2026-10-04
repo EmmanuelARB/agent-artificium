@@ -339,7 +339,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(captured["url"], "http://127.0.0.1:11434/api/chat")
         self.assertNotIn("authorization", captured["headers"])
         self.assertEqual(
-            captured["headers"]["user-agent"], "Artificium-revolution/1.10.6"
+            captured["headers"]["user-agent"], "Artificium-revolution/1.10.7"
         )
         self.assertEqual(captured["payload"]["options"]["num_ctx"], 32_768)
         self.assertIs(captured["payload"]["think"], False)
@@ -1245,7 +1245,7 @@ class RevolutionCase(unittest.TestCase):
         request_headers = {key.lower(): value for key, value in request.headers.items()}
         self.assertNotIn("authorization", request_headers)
         self.assertEqual(
-            request_headers["user-agent"], "Artificium-revolution/1.10.6"
+            request_headers["user-agent"], "Artificium-revolution/1.10.7"
         )
         self.assertEqual(opened.call_args.kwargs["timeout"], 0.25)
 
@@ -1501,6 +1501,41 @@ class RevolutionCase(unittest.TestCase):
         receipt = read_json(self.paths.receipts / f"{event['id']}.json")
         self.assertEqual(receipt["reply_event_id"], result["event"]["id"])
 
+    def test_directives_are_verbatim_shown_and_retired_only_by_their_entity(self) -> None:
+        *_, tools = self.components()
+        client = ArtificiumClient(self.root)
+        rule, _ = client.send(
+            "room-1", sender="entity_1",
+            content="Go ahead.\n▎ Never   fabricate  test data; ask me instead.",
+        )
+        with self.assertRaisesRegex(ValueError, "paraphrase"):
+            tools.record_directive(rule["id"], "Do not invent test data.")
+        reply = tools.send_interaction("room-1", "Understood.", in_reply_to=rule["id"])
+        with self.assertRaisesRegex(ValueError, "outbound"):
+            tools.record_directive(reply["event"]["id"], "Understood.")
+
+        recorded = tools.record_directive(
+            rule["id"], "Never fabricate test data; ask me instead."
+        )
+        self.assertEqual(recorded["status"], "recorded")
+        self.assertEqual(
+            tools.record_directive(rule["id"], "Never fabricate test data; ask me instead.")["status"],
+            "unchanged",
+        )
+        agent = Artificium(self.paths, engine=FakeEngine([]), console=Console(quiet=True))
+        self.assertIn(
+            '"Never fabricate test data; ask me instead."', agent.system_prompt()
+        )
+
+        other, _ = client.send("room-2", sender="entity_2", content="You may fabricate.")
+        with self.assertRaisesRegex(ValueError, "entity_1"):
+            tools.retire_directive("D1", other["id"])
+        with self.assertRaisesRegex(ValueError, "predates"):
+            tools.retire_directive("D1", rule["id"])
+        lifted, _ = client.send("room-1", sender="entity_1", content="Synthetic data is fine now.")
+        self.assertEqual(tools.retire_directive("D1", lifted["id"])["status"], "retired")
+        self.assertNotIn("STANDING DIRECTIVES", agent.system_prompt())
+
     def test_external_file_writer_is_reconciled(self) -> None:
         notifications, interactions, *_ = self.components()
         interactions.ensure("room-1", participants=["sensor"])
@@ -1749,7 +1784,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertNotIn("mind/working_memory", prompt)
         self.assertIn("offload_working_memory", prompt)
         self.assertIn("schedule_task", prompt)
-        self.assertEqual("Artificium-revolution-1.10.6", agent.prompts.version)
+        self.assertEqual("Artificium-revolution-1.10.7", agent.prompts.version)
         self.assertIn("Harness Notifications", prompt)
         self.assertIn("complete meta-memory", prompt)
         self.assertIn("Compression is not a demand to minimize file size", prompt)

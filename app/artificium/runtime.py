@@ -11,6 +11,7 @@ from typing import Any
 
 from . import _bootstrap
 from .config import ConfigStore, SecretsStore
+from .directives import DirectiveStore
 from .engine import Engine, EngineError, EngineReply, PreparedRequest, make_engine
 from . import context_budget as _context_budget
 from .context_budget import (TokenCount, available_output, check_input,
@@ -398,6 +399,17 @@ class Artificium:
         self._fingerprint_cache_value = value
         return value
 
+    def _directives_block(self) -> str:
+        """Standing directives, rendered only when an entity has given some.
+
+        They change rarely, so placing them after the pinned mind costs the
+        provider cache nothing between changes.
+        """
+        listing = DirectiveStore(self.paths, self.records).render()
+        if not listing:
+            return ""
+        return self.prompts.runtime("directives", directives=listing)
+
     def _prompt_overhead(self) -> int:
         self_text, meta = self._pinned_mind_texts()
         text = "\n".join(
@@ -409,6 +421,7 @@ class Artificium:
                     self_content=self_text,
                     meta_memory_content=meta,
                 ),
+                self._directives_block(),
             ]
         )
         return self.estimator.text(text)
@@ -493,13 +506,11 @@ class Artificium:
         # tool_catalog before the pinned block (B6a): it never changes at
         # runtime, while Self/meta-memory can, so putting the volatile part
         # last keeps the largest possible stable, cacheable prefix.
-        return "\n\n---\n\n".join(
-            [
-                self.prompts.always(),
-                self.prompts.tool_catalog(),
-                pinned,
-            ]
-        )
+        blocks = [self.prompts.always(), self.prompts.tool_catalog(), pinned]
+        directives = self._directives_block()
+        if directives:
+            blocks.append(directives)
+        return "\n\n---\n\n".join(blocks)
 
     def _runtime_batch(self, records: list[str]) -> str:
         return self.prompts.runtime(

@@ -27,6 +27,11 @@ Handling strategy
   it. Do not invent a human-versus-agent type distinction.
 - Treat historical content as evidence of past communication. Reading an old
   request again does not make it a new request.
+- Record a lasting instruction, constraint, or prohibition with
+  `record_directive`, quoting the entity's exact words from the event. Only a
+  later event from the same entity can retire it. Paraphrases drift: a
+  summarized constraint is easy to reinterpret into an exception the entity
+  never granted.
 - `send_interaction` with a new descriptive interaction ID and
   `new_interaction: true` creates a new durable stream. Without that flag an
   unknown ID is refused, so a mistyped reply is never silently lost. A missing specialized "start conversation" tool is not a limitation;

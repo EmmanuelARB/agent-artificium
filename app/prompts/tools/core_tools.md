@@ -242,6 +242,25 @@ logged but is not delivered externally. An unknown interaction ID, or an
 lose a reply. Set `new_interaction` to true to start a new durable stream; no
 separate conversation-creation tool is required.
 
+### `record_directive`
+
+```json
+{"tool":"record_directive","event_id":"EVENT_ID","quote":"EXACT WORDS FROM THE EVENT"}
+```
+
+Records a standing instruction, constraint, or prohibition from an inbound
+event. The quote must occur in that event (whitespace may differ); paraphrases
+are refused. Active directives appear in every request until retired.
+
+### `retire_directive`
+
+```json
+{"tool":"retire_directive","directive_id":"D1","event_id":"LATER_EVENT_ID"}
+```
+
+Retires a directive, citing a later event in which the same entity lifted or
+replaced it.
+
 ## Scheduler
 
 The scheduler is persistent and spends no model tokens while waiting. When a

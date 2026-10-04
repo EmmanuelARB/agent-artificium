@@ -35,6 +35,11 @@ the same shape recurring, or reworking existing items instead of covering new
 ground, is a loop; the checkpoint should name the break, not count one more iteration
 of it.
 
+If standing directives are shown, check the plan in your checkpoint against each
+one as written. A plan that needs a narrow reading of a directive, or an
+exception to it, needs that entity's agreement first: ask, and record the
+answer.
+
 If visual context is active or this episode used images, decide explicitly what
 visual understanding to preserve. Record relevant observations and uncertainty,
 preserve each durable image path, and state when it should be loaded again.

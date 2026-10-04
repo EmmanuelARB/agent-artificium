@@ -89,7 +89,9 @@ def _script(module: str, install: Path) -> str:
         ConfigStore(paths).save(Config(
             provider="custom", model="test-model",
             base_url="http://example.invalid/v1",
-            context_window_tokens=20_000,
+            # Room for the shipped prompt pack plus generation; raised as
+            # the pack grows, never to hide an overlay failure.
+            context_window_tokens=32_000,
         ))
         SecretsStore(paths).save_api_key("test-key")
 

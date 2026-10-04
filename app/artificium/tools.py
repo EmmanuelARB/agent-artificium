@@ -122,6 +122,16 @@ class ToolRegistry(
             "interaction_id": "INTERACTION_ID",
             "content": "MESSAGE",
         },
+        "record_directive": {
+            "tool": "record_directive",
+            "event_id": "EVENT_ID",
+            "quote": "EXACT_WORDS_FROM_THE_EVENT",
+        },
+        "retire_directive": {
+            "tool": "retire_directive",
+            "directive_id": "D1",
+            "event_id": "LATER_EVENT_ID",
+        },
         "schedule_task": {
             "tool": "schedule_task",
             "name": "TASK_NAME",
@@ -243,6 +253,13 @@ class ToolRegistry(
             "finish_initialization": self.finish_initialization,
             "sleep": self.sleep,
         }
+        # Tools added after a mixin was first shipped: a workspace overlay of
+        # that mixin written against an older release may lack them, and the
+        # registry must still start.
+        for name in ("record_directive", "retire_directive"):
+            method = getattr(self, name, None)
+            if callable(method):
+                self._functions[name] = method
 
     def accepted_arguments(self, name: str) -> dict[str, list[str]]:
         function = self._functions.get(name)

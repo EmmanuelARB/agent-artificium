@@ -3,6 +3,7 @@ from __future__ import annotations
 import difflib
 from typing import Any
 
+from .directives import DirectiveStore
 from .filesystem import atomic_write_json, safe_identifier
 
 
@@ -160,6 +161,12 @@ class InteractionToolsMixin:
             "similar_interaction_ids": close,
             "known_interaction_ids": known[:20],
         }
+
+    def record_directive(self, event_id: str, quote: str) -> dict[str, Any]:
+        return DirectiveStore(self.paths, self.records).record(event_id, quote)
+
+    def retire_directive(self, directive_id: str, event_id: str) -> dict[str, Any]:
+        return DirectiveStore(self.paths, self.records).retire(directive_id, event_id)
 
     def schedule_task(
         self,
