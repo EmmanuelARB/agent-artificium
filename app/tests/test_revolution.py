@@ -339,7 +339,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(captured["url"], "http://127.0.0.1:11434/api/chat")
         self.assertNotIn("authorization", captured["headers"])
         self.assertEqual(
-            captured["headers"]["user-agent"], "Artificium-revolution/1.10.7"
+            captured["headers"]["user-agent"], "Artificium-revolution/1.10.8"
         )
         self.assertEqual(captured["payload"]["options"]["num_ctx"], 32_768)
         self.assertIs(captured["payload"]["think"], False)
@@ -1245,7 +1245,7 @@ class RevolutionCase(unittest.TestCase):
         request_headers = {key.lower(): value for key, value in request.headers.items()}
         self.assertNotIn("authorization", request_headers)
         self.assertEqual(
-            request_headers["user-agent"], "Artificium-revolution/1.10.7"
+            request_headers["user-agent"], "Artificium-revolution/1.10.8"
         )
         self.assertEqual(opened.call_args.kwargs["timeout"], 0.25)
 
@@ -1648,6 +1648,52 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(tools.list_loaded_images()["active_count"], 0)
         self.assertFalse((self.paths.mind / "working_memory").exists())
 
+    def test_a_long_blocker_streak_triggers_a_step_back_notice(self) -> None:
+        *_, working, _, _, tools = self.components()
+
+        def offload(index: int, blocker: str, progress: str) -> dict:
+            working.append({"role": "assistant", "content": "x" * 2_000}, origin="test")
+            tools.offload_working_memory()
+            return tools.offload_working_memory(
+                path=f"context/attempt-{index}",
+                checkpoint=f"Objective unchanged. Attempt {index} on the failing step.",
+                retrieve_when="Resume work on the failing step.",
+                blocker=blocker,
+                objective_progress=progress,
+                reflection_complete=True,
+            )
+
+        with self.assertRaisesRegex(ValueError, "objective_progress"):
+            tools.offload_working_memory(objective_progress="breakthrough")
+        notices = []
+        for index in range(1, 13):
+            # The wording drifts in case only; the obstacle is the same.
+            name = "Stack Corruption at step 49" if index % 2 else "stack corruption at step 49"
+            result = offload(index, name, "advanced" if index == 1 else "supporting")
+            self.assertEqual(result["blocker_status"]["same_blocker_checkpoints"], index)
+            notices.append(any("STALLED BLOCKER" in item for item in result["_notifications"]))
+        self.assertEqual([i + 1 for i, hit in enumerate(notices) if hit], [6, 12])
+
+        result = offload(13, "a different obstacle", "advanced")
+        self.assertFalse(result["blocker_status"]["stalled"])
+        self.assertEqual(result["blocker_status"]["checkpoints_without_advance"], 0)
+
+    def test_a_blocker_held_for_half_a_day_is_noticed_early(self) -> None:
+        *_, working, _, _, tools = self.components()
+        atomic_write_json(self.paths.runtime / "blocker-history.json", {"history": [
+            {"at": "2026-01-01T00:00:00Z", "blocker": "flaky build", "objective_progress": "none"},
+            {"at": "2026-01-01T06:00:00Z", "blocker": "flaky build", "objective_progress": "none"},
+        ]})
+        working.append({"role": "assistant", "content": "x" * 2_000}, origin="test")
+        tools.offload_working_memory()
+        result = tools.offload_working_memory(
+            path="context/third-attempt", checkpoint="Objective unchanged. Still investigating the flaky build; next: bisect the toolchain.",
+            retrieve_when="Resume the flaky build investigation.", blocker="flaky build",
+            objective_progress="none", reflection_complete=True,
+        )
+        self.assertTrue(result["blocker_status"]["stalled"])
+        self.assertIn("flaky build", result["_notifications"][-1])
+
     def test_self_revision_is_reflective_and_versioned(self) -> None:
         *_, tools = self.components()
         first = tools.revise_self(
@@ -1784,7 +1830,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertNotIn("mind/working_memory", prompt)
         self.assertIn("offload_working_memory", prompt)
         self.assertIn("schedule_task", prompt)
-        self.assertEqual("Artificium-revolution-1.10.7", agent.prompts.version)
+        self.assertEqual("Artificium-revolution-1.10.8", agent.prompts.version)
         self.assertIn("Harness Notifications", prompt)
         self.assertIn("complete meta-memory", prompt)
         self.assertIn("Compression is not a demand to minimize file size", prompt)

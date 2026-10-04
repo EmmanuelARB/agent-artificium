@@ -57,6 +57,13 @@ next action. Reference stable facts already saved in memory by path instead of
 copying them into every checkpoint. Give it a descriptive semantic path and a
 concise `retrieve_when` description.
 
+Also pass `blocker`: a short name for the main obstacle between you and the
+objective, kept identical for as long as the same obstacle blocks you (empty
+when nothing does), and `objective_progress`: `advanced` only if the objective
+itself moved since the previous checkpoint, `supporting` for work around it,
+`none` otherwise. The harness counts these to tell you when a blocker has held
+for a long time.
+
 Then call `offload_working_memory` again with `reflection_complete:true`.
 Anything omitted remains recoverable from archived context, interactions, and
 logs through Infinite Attention, but recovery has a cost—preserve what is

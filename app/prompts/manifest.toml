@@ -1,4 +1,4 @@
-version = "Artificium-revolution-1.10.7"
+version = "Artificium-revolution-1.10.8"
 
 always = [
   "always/core.md",
@@ -35,6 +35,7 @@ meta_memory_pressure = "events/meta_memory_pressure.md"
 pinned_mind_changed = "events/pinned_mind_changed.md"
 working_memory_offload_reflection = "events/working_memory_offload_reflection.md"
 working_memory_offloaded = "events/working_memory_offloaded.md"
+stalled_blocker = "events/stalled_blocker.md"
 attention_opened = "events/attention_opened.md"
 attention_chunk = "events/attention_chunk.md"
 attention_completed = "events/attention_completed.md"

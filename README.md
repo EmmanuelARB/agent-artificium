@@ -269,6 +269,8 @@ Nothing is lost by aiming lower: offloaded history is archived, not deleted.
 
 The model decides what the checkpoint preserves. Archived context and durable interactions are there to recover anything it left out.
 
+**Stalled blockers.** Each confirmed offload may name the main `blocker` and say whether the objective `advanced`, only got `supporting` work, or `none`. The harness keeps that history in `logs/runtime/blocker-history.json`. After six consecutive checkpoints on the same blocker or without an advance (or twelve hours over at least three), it adds a step-back notice: list the assumptions behind the current approach, mark the ones never independently checked, and test the cheapest refutation before another fix of the same kind. The notice repeats every six further checkpoints of the same streak.
+
 **Mandatory offloading**, on by default for new setups, adds a runtime gate at 80% of the target. At the threshold, or when generation needs the remaining context, ordinary actions and sleep are withheld until an offload succeeds. Memory preparation stays available, and the requirement survives restart. Context is never silently truncated.
 
 **Automatic repair**, also on by default for new setups, recovers from a rejected input or an empty answer by retrying from an earlier successful context, with up to three attempts per incident (see [Configuration](#complete-guide)).

@@ -177,13 +177,15 @@ Working-memory offloading is intentionally two-stage. The first call returns a
 memory-formation reflection while full detail remains present. Create or update
 any reusable memories, then repeat the call with a descriptive `path`, a
 self-sufficient `checkpoint`, `retrieve_when`, optional `source_refs`, and
-`reflection_complete:true`. The harness saves the checkpoint and emits
+`reflection_complete:true`, plus `blocker` (a short, stable name for the main
+obstacle, or empty) and `objective_progress` (`advanced`, `supporting`, or
+`none`). The harness saves the checkpoint and emits
 organization Guidance,
 archives the detailed prior context, replaces working memory with the
 checkpoint, and reports before/after token, word, and character estimates.
 
 ```json
-{"tool":"offload_working_memory","path":"context/DESCRIPTIVE-CONTINUATION-NAME","checkpoint":"SELF-SUFFICIENT CONTINUATION","retrieve_when":"WHEN THIS CONTEXT SHOULD BE RESTORED","source_refs":[],"reflection_complete":true}
+{"tool":"offload_working_memory","path":"context/DESCRIPTIVE-CONTINUATION-NAME","checkpoint":"SELF-SUFFICIENT CONTINUATION","retrieve_when":"WHEN THIS CONTEXT SHOULD BE RESTORED","source_refs":[],"blocker":"SHORT STABLE NAME OR EMPTY","objective_progress":"advanced","reflection_complete":true}
 ```
 
 Do not wait for context exhaustion. When a completed task or resolved

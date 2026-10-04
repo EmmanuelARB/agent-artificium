@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .blockers import BlockerTracker
 from .filesystem import atomic_write_text, sortable_id, utc_now
 
 
@@ -75,8 +76,11 @@ class MemoryToolsMixin:
         source_refs: list[str] | None = None,
         reflection_complete: bool = False,
         reason: str = "context_management",
+        blocker: str = "",
+        objective_progress: str = "",
     ) -> dict[str, Any]:
         state = self._control()
+        BlockerTracker.validate(objective_progress)
         if not reflection_complete:
             state["working_memory_offload_pending"] = {
                 "proposed_path": path or None,
@@ -147,6 +151,10 @@ class MemoryToolsMixin:
                 "released_images": released_visual["released"],
             }
         )
+        progress = BlockerTracker(self.paths, self.records).record(
+            blocker, objective_progress
+        )
+        offloaded["blocker_status"] = progress
         offloaded["_notifications"] = [
             self.prompts.event(
                 "working_memory_offloaded",
@@ -168,6 +176,17 @@ class MemoryToolsMixin:
                 retrieve_when=retrieve_when,
             ),
         ]
+        if progress["stalled"]:
+            offloaded["_notifications"].append(
+                self.prompts.event(
+                    "stalled_blocker",
+                    blocker=progress["blocker"] or "(not named)",
+                    same_blocker_checkpoints=progress["same_blocker_checkpoints"],
+                    checkpoints_without_advance=progress["checkpoints_without_advance"],
+                    since=progress["since"],
+                    hours=progress["hours"],
+                )
+            )
         return offloaded
 
     def compact_context(self, **arguments: Any) -> dict[str, Any]:
