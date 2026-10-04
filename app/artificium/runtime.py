@@ -3,6 +3,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import os
+import shutil
 import signal
 import threading
 import time
@@ -1175,6 +1176,39 @@ class Artificium:
             "canonical_example": {"tool": "offload_working_memory"},
         }
 
+    # Low means under 10% of capacity or under 2 GiB, whichever comes first.
+    # One notice when free space becomes low, another each time it halves
+    # again, and none while it stays put, so a full disk is never a surprise
+    # and a merely small one does not nag.
+    _LOW_DISK_FRACTION = 0.10
+    _LOW_DISK_BYTES = 2 * 1024**3
+
+    def _disk_space_events(self) -> list[str]:
+        try:
+            usage = shutil.disk_usage(self.paths.root)
+        except OSError:
+            return []
+        path = self.paths.runtime / "disk-space.json"
+        state = read_json(path, {})
+        notified = state.get("notified_free_bytes") if isinstance(state, dict) else None
+        low = (usage.free < usage.total * self._LOW_DISK_FRACTION
+               or usage.free < self._LOW_DISK_BYTES)
+        if not low:
+            if notified is not None:
+                atomic_write_json(path, {})
+            return []
+        if isinstance(notified, int) and usage.free > notified // 2:
+            return []
+        atomic_write_json(path, {"notified_free_bytes": usage.free, "at": utc_now()})
+        self.records.emit("low_disk_space_noticed", free_bytes=usage.free,
+                          total_bytes=usage.total)
+        return [self.prompts.event(
+            "low_disk_space",
+            free_gib=f"{usage.free / 1024**3:.1f}",
+            total_gib=f"{usage.total / 1024**3:.1f}",
+            free_percent=f"{usage.free / usage.total * 100:.1f}" if usage.total else "0",
+        )]
+
     def _context_events(self) -> list[str]:
         overhead = self._prompt_overhead()
         notice = self.working.pressure_notice(overhead)
@@ -1348,6 +1382,7 @@ class Artificium:
                 metadata=recovery,
             )))
         inputs.extend(self._context_events())
+        inputs.extend(self._disk_space_events())
         inputs.extend(self._pinned_mind_notices())
         # Recheck the memory map when it changes, without needing a timed
         # turn boundary or repeating guidance for an unchanged map.

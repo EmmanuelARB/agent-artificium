@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from . import time_use
 from .blockers import BlockerTracker
 from .filesystem import atomic_write_text, sortable_id, utc_now
 
@@ -92,6 +93,7 @@ class MemoryToolsMixin:
                 "summary": "working-memory offloading paused for conscious memory formation",
                 "_notifications": [
                     self.prompts.event("working_memory_offload_reflection"),
+                    *self._time_use_notice(),
                 ],
             }
         if not state.get("working_memory_offload_pending"):
@@ -188,6 +190,30 @@ class MemoryToolsMixin:
                 )
             )
         return offloaded
+
+    def _time_use_notice(self) -> list[str]:
+        """Measured time use since the last offload, for the reflection."""
+
+        try:
+            usage = time_use.summarize(self.paths.lifetime_log)
+        except OSError:
+            return []
+        if not usage["since"]:
+            return []
+        lines = [
+            f"- Since {usage['since']}: {usage['wall_hours']} h wall time; "
+            f"{usage['model_hours']} h in {usage['model_requests']} model requests; "
+            f"{usage['tool_hours']} h in {usage['tool_calls']} tool calls "
+            f"({usage['failed_tool_calls']} failed); {usage['sleep_hours']} h asleep.",
+        ]
+        for item in usage["slowest_tool_calls"]:
+            target = f": {item['target']}" if item["target"] else ""
+            lines.append(f"- Slow call, {item['seconds']} s, {item['tool']}{target}")
+        for item in usage["repeated_shell_commands"]:
+            lines.append(
+                f"- Run {item['runs']} times ({item['seconds']} s in total): {item['command']}"
+            )
+        return [self.prompts.event("time_use", time_use="\n".join(lines))]
 
     def compact_context(self, **arguments: Any) -> dict[str, Any]:
         """Compatibility alias for pre-1.1 contexts and external tests."""

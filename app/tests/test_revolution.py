@@ -339,7 +339,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(captured["url"], "http://127.0.0.1:11434/api/chat")
         self.assertNotIn("authorization", captured["headers"])
         self.assertEqual(
-            captured["headers"]["user-agent"], "Artificium-revolution/1.10.9"
+            captured["headers"]["user-agent"], "Artificium-revolution/1.10.10"
         )
         self.assertEqual(captured["payload"]["options"]["num_ctx"], 32_768)
         self.assertIs(captured["payload"]["think"], False)
@@ -1245,7 +1245,7 @@ class RevolutionCase(unittest.TestCase):
         request_headers = {key.lower(): value for key, value in request.headers.items()}
         self.assertNotIn("authorization", request_headers)
         self.assertEqual(
-            request_headers["user-agent"], "Artificium-revolution/1.10.9"
+            request_headers["user-agent"], "Artificium-revolution/1.10.10"
         )
         self.assertEqual(opened.call_args.kwargs["timeout"], 0.25)
 
@@ -1729,6 +1729,60 @@ class RevolutionCase(unittest.TestCase):
         self.assertTrue(result["blocker_status"]["stalled"])
         self.assertIn("flaky build", result["_notifications"][-1])
 
+    def test_offload_reflection_reports_measured_time_use(self) -> None:
+        from artificium.time_use import summarize
+
+        def record(at: str, kind: str, **data) -> str:
+            return json.dumps({"timestamp": at, "kind": kind, **data}) + "\n"
+
+        build = {"status": "ok", "command": "make   all"}
+        lines = [
+            record("2026-01-01T00:00:00Z", "model_response", duration_seconds=999),
+            record("2026-01-01T00:30:00Z", "working_memory_offloaded"),
+            record("2026-01-01T01:00:00Z", "model_response", duration_seconds=60),
+        ] + [
+            record(f"2026-01-01T0{hour}:00:00Z", "tool_executed", name="run_shell",
+                   duration_seconds=3_000, result=build)
+            for hour in (2, 3, 4)
+        ] + [
+            record("2026-01-01T05:00:00Z", "tool_executed", name="read_file",
+                   duration_seconds=1, result={"status": "error"}),
+            record("2026-01-01T05:00:00Z", "sleep_started"),
+            record("2026-01-01T07:00:00Z", "sleep_ended"),
+        ]
+        log = self.root / "lifetime.jsonl"
+        log.write_text("".join(lines))
+        usage = summarize(log, now=dt.datetime(2026, 1, 1, 9, tzinfo=dt.timezone.utc))
+        self.assertEqual(usage["since"], "2026-01-01T01:00:00Z")
+        self.assertEqual(usage["wall_hours"], 8.0)
+        self.assertEqual(usage["model_requests"], 1)
+        self.assertEqual(usage["sleep_hours"], 2.0)
+        self.assertEqual(usage["failed_tool_calls"], 1)
+        self.assertEqual(usage["tool_hours"], 2.5)
+        self.assertEqual(usage["repeated_shell_commands"],
+                         [{"command": "make all", "runs": 3, "seconds": 9000.0}])
+        self.assertEqual(usage["slowest_tool_calls"][0]["target"], "make all")
+
+        *_, tools = self.components()
+        self.records.emit("tool_executed", name="run_shell", duration_seconds=2.0,
+                          result={"status": "ok", "command": "true"})
+        notices = tools.offload_working_memory()["_notifications"]
+        self.assertIn("TIME USE SINCE THE PREVIOUS CHECKPOINT", notices[-1])
+        self.assertIn("1 tool calls", notices[-1])
+
+    def test_low_disk_space_is_announced_once_per_halving(self) -> None:
+        from collections import namedtuple
+
+        Usage = namedtuple("Usage", "total used free")
+        agent = Artificium(self.paths, engine=FakeEngine([]), console=Console(quiet=True))
+        gib = 1024**3
+        seen = []
+        for free in (50, 1.5, 1.2, 0.7, 0.5, 0.3, 40, 1.0):
+            with mock.patch("artificium.runtime.shutil.disk_usage",
+                            return_value=Usage(100 * gib, 0, int(free * gib))):
+                seen.append(bool(agent._disk_space_events()))
+        self.assertEqual(seen, [False, True, False, True, False, True, False, True])
+
     def test_self_revision_is_reflective_and_versioned(self) -> None:
         *_, tools = self.components()
         first = tools.revise_self(
@@ -1865,7 +1919,7 @@ class RevolutionCase(unittest.TestCase):
         self.assertNotIn("mind/working_memory", prompt)
         self.assertIn("offload_working_memory", prompt)
         self.assertIn("schedule_task", prompt)
-        self.assertEqual("Artificium-revolution-1.10.9", agent.prompts.version)
+        self.assertEqual("Artificium-revolution-1.10.10", agent.prompts.version)
         self.assertIn("Harness Notifications", prompt)
         self.assertIn("complete meta-memory", prompt)
         self.assertIn("Compression is not a demand to minimize file size", prompt)
