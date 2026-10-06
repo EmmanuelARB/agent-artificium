@@ -40,6 +40,10 @@ Handling strategy
   `new_interaction: true` creates a new durable stream. Without that flag an
   unknown ID is refused, so a mistyped reply is never silently lost. A missing specialized "start conversation" tool is not a limitation;
   reason compositionally from the general interaction primitive.
+- `send_interaction` with `decision: true` (and optional `options`) marks a
+  message that needs the entity's choice or approval; the chat keeps it pinned
+  until answered. Progress reports and questions you can answer yourself stay
+  plain messages. Replying to your own decision withdraws it.
 
 Memory strategy
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import inspect
 from typing import Any
 
 from .directives import DirectiveStore
@@ -109,12 +110,25 @@ class InteractionToolsMixin:
         recipient: str | None = None,
         sender: str | None = None,
         new_interaction: bool = False,
+        decision: bool = False,
+        options: list[str] | None = None,
     ) -> dict[str, Any]:
         refusal = self._check_interaction_target(
             interaction_id, in_reply_to, new_interaction
-        )
+        ) or self._check_decision(decision, options)
         if refusal:
             return refusal
+        extra: dict[str, Any] = {}
+        if decision:
+            extra["kind"] = "decision"
+            if options:
+                if "options" in inspect.signature(self.interactions.add_event).parameters:
+                    extra["options"] = options
+                else:
+                    # An overlay of an older store cannot keep the field; the
+                    # choices still reach the user as part of the text.
+                    content += "\n\nOptions:\n" + "\n".join(
+                        f"{number}. {item}" for number, item in enumerate(options, 1))
         event, path = self.interactions.add_event(
             interaction_id,
             sender=sender or self.config.instance_id,
@@ -123,10 +137,12 @@ class InteractionToolsMixin:
             direction="outbound",
             attachments=[str(self._resolve(item)) for item in (attachments or [])],
             in_reply_to=in_reply_to,
+            **extra,
         )
         return {
             "status": "sent",
-            "summary": "outbound interaction event written",
+            "summary": ("decision sent; it stays pinned for the user until they "
+                        "answer it" if decision else "outbound interaction event written"),
             "path": str(path),
             "event": event,
             "_notifications": [
@@ -136,6 +152,29 @@ class InteractionToolsMixin:
                 )
             ],
         }
+
+    @staticmethod
+    def _check_decision(decision: bool, options: list[str] | None) -> dict[str, Any] | None:
+        """Refuse malformed decision arguments before anything is sent."""
+
+        if options is None:
+            return None
+        if not decision:
+            return {
+                "status": "error",
+                "summary": ("options only apply to a decision; set decision to true, "
+                            "or drop options. Nothing was sent."),
+            }
+        valid = (isinstance(options, list) and 2 <= len(options) <= 8
+                 and all(isinstance(item, str) and 0 < len(item.strip()) <= 200
+                         for item in options))
+        if not valid:
+            return {
+                "status": "error",
+                "summary": ("options must be 2 to 8 non-empty strings of at most 200 "
+                            "characters; nothing was sent."),
+            }
+        return None
 
     def _check_interaction_target(
         self, interaction_id: str, in_reply_to: str | None, new_interaction: bool

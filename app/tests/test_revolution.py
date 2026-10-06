@@ -1476,6 +1476,75 @@ class RevolutionCase(unittest.TestCase):
         result = client.interactions.read_event(event["id"])
         self.assertEqual(result["event"]["content"], "private body")
 
+    def test_a_decision_stays_open_until_either_side_replies(self) -> None:
+        *_, interactions, _est, _w, _m, _a, tools = self.components()
+        client = ArtificiumClient(self.root)
+        client.send("room-d", sender="entity_1", content="Hello")
+        update = tools.send_interaction("room-d", "Phase 2 is done.")
+        self.assertEqual(update["event"]["kind"], "message")
+        first = tools.send_interaction(
+            "room-d", "Which toolchain?", decision=True, options=["clang", "gcc"]
+        )
+        second = tools.send_interaction("room-d", "May I delete the cache?", decision=True)
+        self.assertEqual(first["status"], "sent")
+        self.assertEqual(first["event"]["kind"], "decision")
+        self.assertEqual(first["event"]["options"], ["clang", "gcc"])
+        self.assertNotIn("options", second["event"])
+        open_now = client.open_decisions("room-d")
+        self.assertEqual([item["id"] for item in open_now],
+                         [first["event"]["id"], second["event"]["id"]])
+        client.send("room-d", sender="entity_1", content="clang",
+                    in_reply_to=first["event"]["id"])
+        tools.send_interaction("room-d", "Never mind, found a way.",
+                               in_reply_to=second["event"]["id"])
+        self.assertEqual(client.open_decisions("room-d"), [])
+        self.assertEqual(client.open_decisions(), [])
+
+    def test_old_events_and_updates_are_never_open_decisions(self) -> None:
+        *_, interactions, _est, _w, _m, _a, tools = self.components()
+        client = ArtificiumClient(self.root)
+        client.send("room-o", sender="entity_1", content="Hello")
+        tools.send_interaction("room-o", "Is this fine?")
+        event, path = interactions.add_event(
+            "room-o", sender="artificium", content="legacy", direction="outbound")
+        data = json.loads(path.read_text())
+        data.pop("kind")
+        path.write_text(json.dumps(data))
+        self.assertEqual(client.open_decisions("room-o"), [])
+
+    def test_malformed_decision_arguments_send_nothing(self) -> None:
+        *_, tools = self.components()
+        ArtificiumClient(self.root).send("room-m", sender="entity_1", content="Hello")
+        for kwargs in ({"options": ["a", "b"]},
+                       {"decision": True, "options": ["only one"]},
+                       {"decision": True, "options": ["a", ""]},
+                       {"decision": True, "options": "a, b"},
+                       {"decision": True, "options": [str(n) for n in range(9)]}):
+            result = tools.send_interaction("room-m", "Choose.", **kwargs)
+            self.assertEqual(result["status"], "error", kwargs)
+        self.assertEqual(len(ArtificiumClient(self.root).events("room-m")), 1)
+
+    def test_a_store_without_options_support_still_delivers_the_choices(self) -> None:
+        *_, interactions, _est, _w, _m, _a, tools = self.components()
+        ArtificiumClient(self.root).send("room-l", sender="entity_1", content="Hello")
+        real = interactions.add_event
+
+        def older(interaction_id, *, sender, content, direction="inbound", kind="message",
+                  name=None, participants=(), attachments=(), in_reply_to=None,
+                  recipient=None):
+            return real(interaction_id, sender=sender, content=content,
+                        direction=direction, kind=kind, name=name,
+                        participants=participants, attachments=attachments,
+                        in_reply_to=in_reply_to, recipient=recipient)
+
+        interactions.add_event = older
+        result = tools.send_interaction("room-l", "Pick one.", decision=True,
+                                        options=["red", "blue"])
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(result["event"]["kind"], "decision")
+        self.assertIn("1. red", result["event"]["content"])
+        self.assertIn("2. blue", result["event"]["content"])
+
     def test_send_interaction_refuses_a_mistyped_destination(self) -> None:
         *_, tools = self.components()
         event, _ = ArtificiumClient(self.root).send(

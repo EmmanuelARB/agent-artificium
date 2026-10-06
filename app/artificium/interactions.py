@@ -224,6 +224,7 @@ class InteractionStore:
         attachments: Sequence[str | Path] = (),
         in_reply_to: str | None = None,
         recipient: str | None = None,
+        options: Sequence[str] = (),
     ) -> tuple[dict[str, Any], Path]:
         interaction_id = safe_identifier(interaction_id, label="interaction id")
         sender = safe_identifier(sender, label="entity id")
@@ -250,6 +251,9 @@ class InteractionStore:
                 "attachments": copied,
                 "in_reply_to": in_reply_to,
             }
+            if options:
+                # Absent otherwise, so events keep their historical shape.
+                event["options"] = [str(item) for item in options]
             path = self._event_path(interaction_id, event_id)
             atomic_write_json(path, event)
             if direction == "inbound":
@@ -400,6 +404,28 @@ class InteractionStore:
                 result.append(value)
         return sorted(result, key=lambda item: str(item.get("created_at") or ""))
 
+    def open_decisions(self, interaction_id: str | None = None) -> list[dict[str, Any]]:
+        """Outbound events of kind ``decision`` that nothing has replied to.
+
+        Derived from the event files, so it survives restarts and any client.
+        A reply from either side (the user's answer, or the agent withdrawing
+        the question) closes a decision; events written before decisions
+        existed have no such kind and are never listed.
+        """
+
+        interactions = ([interaction_id] if interaction_id
+                        else [str(item["id"]) for item in self.list_interactions()])
+        found: list[dict[str, Any]] = []
+        for identifier in interactions:
+            events = self.events(identifier)
+            answered = {event.get("in_reply_to") for event in events
+                        if event.get("in_reply_to")}
+            found.extend(event for event in events
+                         if event.get("direction") == "outbound"
+                         and event.get("kind") == "decision"
+                         and event.get("id") not in answered)
+        return sorted(found, key=lambda item: str(item.get("created_at") or ""))
+
     def list_interactions(self, entity_id: str | None = None) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for path in sorted(self.paths.interactions.glob("*/interaction.json")):
@@ -493,6 +519,9 @@ class ArtificiumClient:
 
     def events(self, interaction_id: str) -> list[dict[str, Any]]:
         return self.interactions.events(interaction_id)
+
+    def open_decisions(self, interaction_id: str | None = None) -> list[dict[str, Any]]:
+        return self.interactions.open_decisions(interaction_id)
 
     def interactions_for(self, entity_id: str | None = None) -> list[dict[str, Any]]:
         return self.interactions.list_interactions(entity_id)

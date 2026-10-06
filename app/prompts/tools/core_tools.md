@@ -259,14 +259,17 @@ obligation visible in runtime state.
 ### `send_interaction`
 
 ```json
-{"tool":"send_interaction","interaction_id":"INTERACTION_ID","content":"MESSAGE","in_reply_to":"EVENT_ID OR NULL","attachments":[],"recipient":null,"new_interaction":false}
+{"tool":"send_interaction","interaction_id":"INTERACTION_ID","content":"MESSAGE","in_reply_to":"EVENT_ID OR NULL","attachments":[],"recipient":null,"new_interaction":false,"decision":false,"options":null}
 ```
 
 Writes one outbound event to the exact interaction. Plain life-loop text is
 logged but is not delivered externally. An unknown interaction ID, or an
 `in_reply_to` event from another interaction, is refused so a mistyped ID cannot
 lose a reply. Set `new_interaction` to true to start a new durable stream; no
-separate conversation-creation tool is required.
+separate conversation-creation tool is required. Set `decision` to true only
+when you need the entity to choose or approve before you can go on (`options`:
+2 to 8 short choices); chat pins it until answered, while progress reports stay
+plain. Reply to your own decision to withdraw it.
 
 ### `record_directive`
 
