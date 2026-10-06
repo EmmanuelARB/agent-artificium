@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import shutil
 import subprocess
 import tempfile
@@ -22,8 +23,19 @@ ROOT = Path(__file__).resolve().parents[2]
 @unittest.skipUnless(shutil.which("git"), "Git is required for upgrade integration tests")
 class UpgradeCase(unittest.TestCase):
     def setUp(self):
+        # Git may start a detached `gc --auto` after a commit or a fetch,
+        # depending on object hashes; it then writes a pack while the
+        # temporary directory is being removed. Every git these tests run,
+        # including the upgrade's own, inherits this configuration.
+        quiet_git = mock.patch.dict(os.environ, {
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_CONFIG_KEY_0": "gc.auto", "GIT_CONFIG_VALUE_0": "0",
+            "GIT_CONFIG_KEY_1": "maintenance.auto", "GIT_CONFIG_VALUE_1": "false",
+        })
+        quiet_git.start()
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
+        self.addCleanup(quiet_git.stop)
         self.directory = Path(temporary.name)
         self.source = self.directory / "upstream"
         self.source.mkdir()
