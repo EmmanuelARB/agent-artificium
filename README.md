@@ -329,7 +329,7 @@ Publishing an input does not wait for an answer. A compact notification tells th
 
 New input can arrive while inference or a tool is running. It reaches the agent at the next inference boundary; it does not preempt the current request or run in parallel with the shell.
 
-Replies are outbound events created with `send_interaction`; ordinary model text stays in the internal trace. A reply to an unknown interaction ID, or with an `in_reply_to` event from another interaction, is refused rather than written to a new stream nobody reads; the agent starts a new stream only with `new_interaction: true`. A client or bridge delivers replies to their destination. All interactions within one instance share its mind. Built-in spawning and swarm coordination are future work.
+Replies are outbound events created with `send_interaction`; ordinary model text stays in the internal trace. A reply to an unknown interaction ID, or with an `in_reply_to` event from another interaction, is refused rather than written to a new stream nobody reads; the agent starts a new stream only with `new_interaction: true`. It marks a message that needs your choice or approval with `decision: true` (and optionally `options`); chat pins such a message until it is answered, and a reply to it, from either side, closes it. A client or bridge delivers replies to their destination. All interactions within one instance share its mind. Built-in spawning and swarm coordination are future work.
 
 </details>
 
@@ -660,7 +660,7 @@ Each model response line shows input, cached, and output tokens, generation spee
 
 ### Chat, attachments, and large sources
 
-Chat supports `/history`, `/attach PATH MESSAGE`, `/status`, `/help`, and `/quit`. For paths with spaces, use the CLI's quoted attachment argument:
+Chat supports `/history`, `/reply N TEXT`, `/attach PATH MESSAGE`, `/edit`, `/paste`, `/status`, `/help`, and `/quit`. For paths with spaces, use the CLI's quoted attachment argument:
 
 ```bash
 python3 artificium.py send --interaction main --sender user_1 --attachment "my image.png" "Inspect this."
