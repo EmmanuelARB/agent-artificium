@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -12,7 +14,11 @@ from artificium.cli_chat import (
     _chat_entity,
     _choose_interaction,
     _edit_message,
+    _decision_panel,
+    _panel_rows,
+    _print_event,
     _read_chat_message,
+    _route_message,
 )
 from artificium.filesystem import Paths
 from artificium.interactions import ArtificiumClient
@@ -121,6 +127,101 @@ class EditorCase(unittest.TestCase):
     def test_a_failing_editor_sends_nothing(self) -> None:
         self.assertEqual(self.run_editor("false"), "")
         self.assertEqual(self.run_editor("definitely-not-an-editor-xyz"), "")
+
+
+def _decision(number: int, text: str, options=None, stamp="2026-10-06T08:00:00Z") -> dict:
+    event = {"id": f"event_{number}", "direction": "outbound", "kind": "decision",
+             "sender": "artificium", "content": text, "created_at": stamp}
+    if options:
+        event["options"] = options
+    return event
+
+
+class DecisionPanelCase(unittest.TestCase):
+    def test_no_decisions_means_no_panel(self) -> None:
+        self.assertEqual(_decision_panel([]), [])
+
+    def test_panel_numbers_decisions_and_lists_options(self) -> None:
+        lines = _decision_panel(
+            [_decision(1, "Which toolchain?\nIt matters.", ["clang", "gcc"]),
+             _decision(2, "Delete the cache?")], columns=60)
+        text = "\n".join(lines)
+        self.assertIn("2 decisions waiting for you", lines[0])
+        self.assertIn("[1]", text)
+        self.assertIn("[2]", text)
+        self.assertIn("1) clang", text)
+        self.assertIn("It matters.", text)
+        self.assertIn("/reply N TEXT", lines[-1])
+        self.assertNotIn("just type", lines[-1])
+
+    def test_a_single_decision_says_plain_typing_answers_it(self) -> None:
+        lines = _decision_panel([_decision(1, "Proceed?")])
+        self.assertIn("1 decision waiting", lines[0])
+        self.assertIn("just type your answer", lines[-1])
+
+    def test_a_long_decision_is_trimmed_in_the_panel_only(self) -> None:
+        body = "\n".join(f"line {n}" for n in range(30))
+        text = "\n".join(_decision_panel([_decision(1, body)]))
+        self.assertIn("line 9", text)
+        self.assertNotIn("line 10", text)
+        self.assertIn("20 more lines", text)
+
+    def test_color_is_off_unless_requested(self) -> None:
+        self.assertNotIn("\x1b", "\n".join(_decision_panel([_decision(1, "Q?")])))
+        self.assertIn("\x1b", "\n".join(_decision_panel([_decision(1, "Q?")], color=True)))
+
+    def test_row_count_ignores_color_codes_and_counts_wrapping(self) -> None:
+        self.assertEqual(_panel_rows(["\x1b[1mabc\x1b[0m", ""], columns=10), 2)
+        self.assertEqual(_panel_rows(["x" * 25], columns=10), 3)
+
+    def test_history_marks_decisions_and_dims_only_agent_updates(self) -> None:
+        def show(event, color=False):
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                _print_event(event, local_entity="user_1", color=color)
+            return buffer.getvalue()
+
+        decision = show(_decision(1, "Pick?", ["a", "b"]), color=True)
+        self.assertIn("· decision", decision)
+        self.assertIn("1) a", decision)
+        self.assertNotIn("\x1b[2m", decision)
+        update = {"direction": "outbound", "sender": "artificium", "content": "Done.",
+                  "created_at": "2026-10-06T08:00:00Z"}
+        self.assertIn("\x1b[2mDone.", show(update, color=True))
+        self.assertNotIn("\x1b", show(update))
+
+
+class ReplyRoutingCase(unittest.TestCase):
+    def test_one_open_decision_is_answered_by_a_plain_message(self) -> None:
+        content, target, note = _route_message("go ahead", [_decision(1, "Proceed?")])
+        self.assertEqual((content, target), ("go ahead", "event_1"))
+        self.assertIn("answering", note)
+
+    def test_a_bare_option_number_sends_that_option(self) -> None:
+        decisions = [_decision(1, "Which?", ["clang", "gcc"])]
+        self.assertEqual(_route_message("2", decisions)[:2], ("gcc", "event_1"))
+        self.assertEqual(_route_message("3", decisions)[:2], ("3", "event_1"))
+
+    def test_several_open_decisions_are_never_guessed(self) -> None:
+        decisions = [_decision(1, "A?"), _decision(2, "B?", ["x", "y"])]
+        content, target, note = _route_message("sure", decisions)
+        self.assertEqual((content, target), ("sure", None))
+        self.assertIn("/reply N", note)
+        self.assertEqual(_route_message("/reply 2 2", decisions)[:2], ("y", "event_2"))
+        self.assertEqual(_route_message("/reply 1 yes, do it", decisions)[:2],
+                         ("yes, do it", "event_1"))
+
+    def test_bad_reply_commands_are_explained_not_sent(self) -> None:
+        decisions = [_decision(1, "A?")]
+        for text in ("/reply", "/reply 1", "/reply 9 hi", "/reply x hi"):
+            content, target, note = _route_message(text, decisions)
+            self.assertIsNone(target, text)
+            self.assertIn("Usage", note)
+        self.assertIn("No decision", _route_message("/reply 1 hi", [])[2])
+
+    def test_with_nothing_open_a_message_is_just_a_message(self) -> None:
+        self.assertEqual(_route_message("hello", []), ("hello", None, None))
+        self.assertEqual(_route_message("/replying now", []), ("/replying now", None, None))
 
 
 if __name__ == "__main__":

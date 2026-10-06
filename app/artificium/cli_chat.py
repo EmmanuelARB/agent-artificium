@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -20,6 +21,8 @@ import unicodedata
 from typing import Any, Callable
 
 from . import cli as _cli
+from .decisions import answer_text, decision_options, open_decisions
+from .display import colors_enabled
 from .filesystem import Paths, atomic_write_json, read_json, safe_identifier, sortable_id
 from .interactions import ArtificiumClient
 
@@ -39,7 +42,15 @@ def _local_time(value: Any) -> str:
         return raw
 
 
-def _print_event(event: dict[str, Any], *, local_entity: str | None = None) -> None:
+_DIM = "\x1b[2m"
+_BOLD = "\x1b[1m"
+_RESET = "\x1b[0m"
+PANEL_CONTENT_LINES = 10
+
+
+def _print_event(
+    event: dict[str, Any], *, local_entity: str | None = None, color: bool = False
+) -> None:
     sender = str(event.get("sender") or "unknown")
     direction = str(event.get("direction") or "")
     if direction == "outbound":
@@ -50,13 +61,102 @@ def _print_event(event: dict[str, Any], *, local_entity: str | None = None) -> N
         label = "You"
     else:
         label = sender
+    decision = direction == "outbound" and event.get("kind") == "decision"
     timestamp = _local_time(event.get("created_at"))
     content = str(event.get("content") or "")
-    print(f"\n[{timestamp}] {label}")
-    print(content)
+    print(f"\n[{timestamp}] {label}" + (" · decision" if decision else ""))
+    # Progress reports from the agent are dimmed so decisions and replies
+    # stand out; the text itself is never shortened.
+    update = direction == "outbound" and not decision
+    print(f"{_DIM}{content}{_RESET}" if color and update else content)
+    for number, option in enumerate(decision_options(event), 1):
+        print(f"  {number}) {option}")
     attachments = event.get("attachments") or []
     if attachments:
         print("Attachments: " + ", ".join(str(item) for item in attachments))
+
+
+def _decision_panel(
+    decisions: list[dict[str, Any]], *, columns: int = 80, color: bool = False
+) -> list[str]:
+    """The block pinned above the prompt while the agent waits for an answer."""
+
+    if not decisions:
+        return []
+    bold, dim, reset = (_BOLD, _DIM, _RESET) if color else ("", "", "")
+    count = len(decisions)
+    title = f"{count} decision{'s' if count != 1 else ''} waiting for you"
+    lines = [f"{bold}━━ {title} " + "━" * max(0, columns - len(title) - 4) + reset]
+    for number, decision in enumerate(decisions, 1):
+        text = str(decision.get("content") or "").strip().splitlines() or [""]
+        shown = text[:PANEL_CONTENT_LINES]
+        stamp = _local_time(decision.get("created_at"))
+        lines.append(f"{bold}[{number}]{reset} {dim}{stamp}{reset}  {shown[0]}")
+        lines.extend(f"    {line}" for line in shown[1:])
+        if len(text) > len(shown):
+            lines.append(f"    {dim}… {len(text) - len(shown)} more lines "
+                         f"(see /history){reset}")
+        for index, option in enumerate(decision_options(decision), 1):
+            lines.append(f"    {index}) {option}")
+    hint = "answer with /reply N TEXT" + (
+        "" if count > 1 else ", or just type your answer")
+    lines.append(f"{dim}{hint}{reset}")
+    return lines
+
+
+def _panel_rows(lines: list[str], columns: int | None = None) -> int:
+    """Physical terminal rows a block of printed lines occupies."""
+
+    terminal_columns = max(
+        1, int(columns or shutil.get_terminal_size(fallback=(80, 24)).columns))
+    total = 0
+    for line in lines:
+        visible = "".join(_ANSI.split(line)) if "\x1b" in line else line
+        width = _chat_display_width(visible)
+        total += max(1, (width + terminal_columns - 1) // terminal_columns)
+    return total
+
+
+def _erase_rows_above(rows: int) -> None:
+    """Remove the ``rows`` rows just above the cursor, and everything below."""
+
+    if rows > 0:
+        sys.stdout.write(f"\033[{rows}A")
+    sys.stdout.write("\r\033[J")
+    sys.stdout.flush()
+
+
+def _route_message(
+    content: str, decisions: list[dict[str, Any]]
+) -> tuple[str, str | None, str | None]:
+    """Decide which decision, if any, a typed message answers.
+
+    Returns ``(content, in_reply_to, note)``. ``/reply N TEXT`` is explicit;
+    a plain message answers the one open decision when there is exactly one,
+    and is otherwise left unattached rather than guessed.
+    """
+
+    if content == "/reply" or content.startswith("/reply "):
+        parts = content.split(maxsplit=2)
+        if (len(parts) < 3 or not parts[1].isdigit()
+                or not 1 <= int(parts[1]) <= len(decisions)):
+            return content, None, (
+                "Usage: /reply N TEXT, where N is a decision number shown above"
+                if decisions else "No decision is waiting for an answer.")
+        decision = decisions[int(parts[1]) - 1]
+        text = answer_text(decision, parts[2])
+        return text, str(decision["id"]), f"answering decision {parts[1]}"
+    if len(decisions) == 1:
+        text = answer_text(decisions[0], content)
+        return text, str(decisions[0]["id"]), "answering the open decision"
+    if len(decisions) > 1:
+        return content, None, (
+            f"{len(decisions)} decisions are open and this message answers none; "
+            "use /reply N TEXT")
+    return content, None, None
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 def _chat_input_prompt(entity: str) -> str:
@@ -269,48 +369,82 @@ def _chat_repl(
     client = ArtificiumClient(paths.install)
     entity = _chat_entity(paths, entity)
     interaction_id = _choose_interaction(client, entity, interaction, name, new)
+    color = colors_enabled()
     seen = {str(item.get("id")) for item in client.events(interaction_id)}
     print("\n╭─ Artificium terminal interaction")
     print(f"│ Thread: {interaction_id}")
     print(f"│ You:    {entity}")
     print("│ /help lists commands; Ctrl-C or /quit closes ONLY this chat client.")
     print("╰─ TO STOP ARTIFICIUM: python3 artificium.py stop\n")
-    for event in client.events(interaction_id):
-        _print_event(event, local_entity=entity)
+    history = client.events(interaction_id)
+    for event in history:
+        _print_event(event, local_entity=entity, color=color)
 
     stop = threading.Event()
     input_active = threading.Event()
     output_lock = threading.Lock()
     input_prompt = _chat_input_prompt(entity)
-    # The prompt currently on screen, which differs from `input_prompt`
-    # while a multi-line draft is open.
-    shown = {"prompt": input_prompt}
     try:
         import readline  # noqa: F401
     except ImportError:
         readline = None  # type: ignore[assignment]
+    # The prompt currently on screen, which differs from `input_prompt`
+    # while a multi-line draft is open; and the decision panel above it.
+    shown = {"prompt": input_prompt, "panel_rows": 0, "panel_ids": [], "announced": set()}
+
+    def draw_panel(decisions: list[dict[str, Any]]) -> None:
+        """Print the pinned panel just above where the prompt will appear."""
+
+        columns = shutil.get_terminal_size(fallback=(80, 24)).columns
+        lines = _decision_panel(decisions, columns=columns, color=color)
+        for line in lines:
+            print(line)
+        shown["panel_rows"] = _panel_rows(lines, columns)
+        shown["panel_ids"] = [str(item["id"]) for item in decisions]
+        fresh = set(shown["panel_ids"]) - shown["announced"]
+        if fresh and color:
+            sys.stdout.write("\a")
+        shown["announced"] |= set(shown["panel_ids"])
 
     def poll() -> None:
         while not stop.wait(0.5):
-            for event in client.events(interaction_id):
-                event_id = str(event.get("id"))
-                if event_id in seen:
-                    continue
-                seen.add(event_id)
-                with output_lock:
-                    if input_active.is_set():
-                        _clear_chat_input(shown["prompt"], readline)
-                    else:
-                        print("\r\033[2K", end="", flush=True)
-                    _print_event(event, local_entity=entity)
-                    if input_active.is_set():
-                        _restore_chat_input(shown["prompt"], readline)
+            events = client.events(interaction_id)
+            fresh = [item for item in events if str(item.get("id")) not in seen]
+            decisions = open_decisions(events)
+            ids = [str(item["id"]) for item in decisions]
+            # Only the main prompt sits directly under the panel; while a
+            # multi-line draft is open its earlier lines are in between, so
+            # the panel is left alone until the next prompt.
+            at_main = input_active.is_set() and shown["prompt"] == input_prompt
+            if not fresh and (ids == shown["panel_ids"] or not at_main):
+                continue
+            with output_lock:
+                at_main = input_active.is_set() and shown["prompt"] == input_prompt
+                if at_main:
+                    _clear_chat_input(shown["prompt"], readline)
+                    _erase_rows_above(shown["panel_rows"])
+                elif input_active.is_set():
+                    _clear_chat_input(shown["prompt"], readline)
+                else:
+                    print("\r\033[2K", end="", flush=True)
+                for event in fresh:
+                    seen.add(str(event.get("id")))
+                    # A new decision is shown by the panel, not in the log.
+                    if (event.get("kind") == "decision"
+                            and event.get("direction") == "outbound"):
+                        continue
+                    _print_event(event, local_entity=entity, color=color)
+                if at_main:
+                    draw_panel(decisions)
+                if input_active.is_set():
+                    _restore_chat_input(shown["prompt"], readline)
 
     thread = threading.Thread(target=poll, daemon=True)
     thread.start()
     try:
         while True:
             with output_lock:
+                draw_panel(open_decisions(client.events(interaction_id)))
                 input_active.set()
             try:
                 # Give the prompt to Readline so its cursor and wrapping math
@@ -321,18 +455,22 @@ def _chat_repl(
                 )
             finally:
                 input_active.clear()
+                # What was on screen is scrollback now; never erase it.
+                shown["panel_rows"] = 0
             if not content:
                 continue
             if content == "/quit":
                 break
             if content == "/history":
                 for event in client.events(interaction_id):
-                    _print_event(event, local_entity=entity)
+                    _print_event(event, local_entity=entity, color=color)
                 continue
             if content == "/help":
                 print(
                     "Commands:\n"
                     "  /history                 show the complete thread\n"
+                    "  /reply N TEXT            answer decision N (a bare option\n"
+                    "                           number sends that option)\n"
                     "  /attach PATH MESSAGE     send one attachment\n"
                     "  /edit                    write a long message in $EDITOR\n"
                     "  /paste                   paste lines; finish with a line of `.`\n"
@@ -352,6 +490,9 @@ def _chat_repl(
                 if alive and runtime.get("status") == "blocked":
                     print("Model requests paused: " + str(runtime.get("error", "")))
                     print("Correct the problem, then run: python3 artificium.py restart")
+                waiting = len(open_decisions(client.events(interaction_id)))
+                if waiting:
+                    print(f"{waiting} decision{'s' if waiting != 1 else ''} waiting for you.")
                 continue
             attachments: list[str] = []
             if content.startswith("/attach "):
@@ -361,11 +502,21 @@ def _chat_repl(
                     continue
                 attachments = [parts[1]]
                 content = parts[2]
+            content, reply_to, note = _route_message(
+                content, open_decisions(client.events(interaction_id))
+            )
+            if note and reply_to is None:
+                print(note)
+                if content.startswith("/reply"):
+                    continue
+            elif note:
+                print(f"({note})")
             event, _ = client.send(
                 interaction_id,
                 sender=entity,
                 content=content,
                 attachments=attachments,
+                in_reply_to=reply_to,
             )
             seen.add(str(event["id"]))
     except (KeyboardInterrupt, EOFError):
@@ -374,4 +525,3 @@ def _chat_repl(
         stop.set()
         thread.join(timeout=1)
         _cli._print_detach_status(paths, client="chat client")
-

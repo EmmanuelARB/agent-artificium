@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .config import ConfigStore, configured_paths
+from .decisions import open_decisions as _open_decisions
 from .filesystem import (
     Paths,
     atomic_write_json,
@@ -405,25 +406,14 @@ class InteractionStore:
         return sorted(result, key=lambda item: str(item.get("created_at") or ""))
 
     def open_decisions(self, interaction_id: str | None = None) -> list[dict[str, Any]]:
-        """Outbound events of kind ``decision`` that nothing has replied to.
-
-        Derived from the event files, so it survives restarts and any client.
-        A reply from either side (the user's answer, or the agent withdrawing
-        the question) closes a decision; events written before decisions
-        existed have no such kind and are never listed.
-        """
+        """Unanswered decisions (see :mod:`decisions`), derived from the event
+        files so they survive restarts and are the same for every client."""
 
         interactions = ([interaction_id] if interaction_id
                         else [str(item["id"]) for item in self.list_interactions()])
         found: list[dict[str, Any]] = []
         for identifier in interactions:
-            events = self.events(identifier)
-            answered = {event.get("in_reply_to") for event in events
-                        if event.get("in_reply_to")}
-            found.extend(event for event in events
-                         if event.get("direction") == "outbound"
-                         and event.get("kind") == "decision"
-                         and event.get("id") not in answered)
+            found.extend(_open_decisions(self.events(identifier)))
         return sorted(found, key=lambda item: str(item.get("created_at") or ""))
 
     def list_interactions(self, entity_id: str | None = None) -> list[dict[str, Any]]:

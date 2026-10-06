@@ -91,6 +91,8 @@ Chat opens straight onto the prompt: it resumes your latest thread as the entity
 
 A message can span several lines: end a line with `\` to continue on the next, type `/paste` and finish with a line holding only `.`, or type `/edit` to write it in `$EDITOR`. Ctrl-C inside an unfinished draft discards the draft instead of closing the chat.
 
+**Updates and decisions.** The agent's progress reports scroll by dimmed. When it needs you to choose or approve something it marks the message as a decision: chat pins it, numbered, in a panel just above your prompt (with a terminal bell), and moves it back to the bottom whenever new output arrives. With one decision open, just type your answer; with several, use `/reply N TEXT`, where a bare option number sends that option. A decision stays open until it is answered, or the agent withdraws it, even across chat restarts; `/status` shows how many are waiting.
+
 *Tip: for a graphical chat, ask the agent to build a browser-based chat UI and send you the link.*
 
 **Watch the life-loop.** In another terminal, follow its thoughts, tool use, token usage, and state changes:
