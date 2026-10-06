@@ -9,6 +9,8 @@ from .records import Records
 
 
 _WHITESPACE = re.compile(r"\s+")
+# A word that looks like a file name or path: something.ext, dir/file.ext.
+_FILE_TOKEN = re.compile(r"[\w./~-]*\w\.[A-Za-z0-9]{1,8}\b")
 MAX_ACTIVE_DIRECTIVES = 40
 MAX_QUOTE_CHARACTERS = 2_000
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
@@ -74,6 +76,44 @@ class DirectiveStore:
             return source.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return None
+
+    def referenced_files(self, text: str, limit: int = 5) -> list[Path]:
+        """Workspace files a message names, so the agent can treat a brief
+        as binding without being told to.
+
+        Only the workspace root, `mind/space/`, and paths written out in the
+        message are looked up; the workspace itself is never walked.
+        """
+        root = self.paths.root.resolve()
+        found: list[Path] = []
+        for token in dict.fromkeys(_FILE_TOKEN.findall(text)):
+            token = token.rstrip(".")
+            given = Path(token).expanduser()
+            candidates = ([given] if given.is_absolute()
+                          else [root / given, self.paths.space / given])
+            for candidate in candidates:
+                try:
+                    resolved = candidate.resolve()
+                    resolved.relative_to(root)
+                except (OSError, ValueError):
+                    continue
+                if resolved.is_file() and resolved not in found:
+                    if self._source_text(resolved) is not None:
+                        found.append(resolved)
+                    break
+            if len(found) >= limit:
+                break
+        return found
+
+    def unrecorded_briefs(self, event: dict[str, Any]) -> list[Path]:
+        """Files an inbound event names that no active directive quotes yet."""
+
+        if event.get("direction") != "inbound":
+            return []
+        quoted = {str(item.get("source_path")) for item in self.active()
+                  if item.get("source_path")}
+        return [path for path in self.referenced_files(str(event.get("content") or ""))
+                if str(path) not in quoted]
 
     def record(self, event_id: str, quote: str, source: Path | None = None) -> dict[str, Any]:
         event = self._inbound_event(event_id)

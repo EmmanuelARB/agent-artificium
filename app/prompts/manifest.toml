@@ -1,4 +1,4 @@
-version = "Artificium-revolution-1.10.16"
+version = "Artificium-revolution-1.10.17"
 
 always = [
   "always/core.md",
@@ -41,6 +41,7 @@ stalled_blocker = "events/stalled_blocker.md"
 time_use = "events/time_use.md"
 low_disk_space = "events/low_disk_space.md"
 artifact_reminder = "events/artifact_reminder.md"
+brief_referenced = "events/brief_referenced.md"
 attention_opened = "events/attention_opened.md"
 attention_chunk = "events/attention_chunk.md"
 attention_completed = "events/attention_completed.md"

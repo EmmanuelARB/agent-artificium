@@ -4,7 +4,7 @@ import difflib
 from typing import Any
 
 from .directives import DirectiveStore
-from .filesystem import atomic_write_json, safe_identifier
+from .filesystem import atomic_write_json, read_json, safe_identifier
 
 
 class InteractionToolsMixin:
@@ -55,7 +55,34 @@ class InteractionToolsMixin:
             result["event"] = bounded
             result["status"] = "requires_attention"
             result["content_characters"] = len(content)
+        if isinstance(event, dict):
+            notice = self._brief_notice(event)
+            if notice:
+                result["_notifications"] = [notice]
         return result
+
+    def _brief_notice(self, event: dict[str, Any]) -> str | None:
+        """Point out, once per event, workspace files a message names.
+
+        An instruction like "follow the rules in FILE" is easy to acknowledge
+        and then lose: the rules sit in the file, not in the message.
+        """
+        store = DirectiveStore(self.paths, self.records)
+        files = store.unrecorded_briefs(event)
+        if not files:
+            return None
+        seen_path = self.paths.runtime / "brief-notices.json"
+        seen = read_json(seen_path, [])
+        seen = seen if isinstance(seen, list) else []
+        if event.get("id") in seen:
+            return None
+        atomic_write_json(seen_path, (seen + [event.get("id")])[-500:])
+        return self.prompts.event(
+            "brief_referenced",
+            event_id=event.get("id"),
+            entity=event.get("sender"),
+            files="\n".join(f"- {path}" for path in files),
+        )
 
     def set_interaction_event_status(
         self, event_id: str, status: str, reason: str | None = None
@@ -166,7 +193,15 @@ class InteractionToolsMixin:
         self, event_id: str, quote: str, source_path: str | None = None
     ) -> dict[str, Any]:
         source = self._resolve(source_path) if source_path else None
-        return DirectiveStore(self.paths, self.records).record(event_id, quote, source)
+        store = DirectiveStore(self.paths, self.records)
+        result = store.record(event_id, quote, source)
+        if source is None:
+            # Recording "follow the file" without the file's rules is the
+            # half-step this catches; the notice fires once per event.
+            notice = self._brief_notice(store._inbound_event(event_id))
+            if notice:
+                result["_notifications"] = [notice]
+        return result
 
     def retire_directive(self, directive_id: str, event_id: str) -> dict[str, Any]:
         return DirectiveStore(self.paths, self.records).retire(directive_id, event_id)

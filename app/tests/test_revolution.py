@@ -1576,6 +1576,30 @@ class RevolutionCase(unittest.TestCase):
             tools.retire_directive(recorded["directive"]["id"], lifted["id"])["status"], "retired"
         )
 
+    def test_a_message_naming_a_brief_prompts_recording_its_rules(self) -> None:
+        *_, tools = self.components()
+        (self.paths.root / "TASK.md").write_text("Rules:\n9. Commit small, working increments.\n")
+        client = ArtificiumClient(self.root)
+        plain, _ = client.send("room-1", sender="entity_1",
+                               content="Look at missing.md and /etc/passwd, then rest.")
+        self.assertNotIn("_notifications", tools.read_interaction_event(plain["id"]))
+
+        brief, _ = client.send("room-1", sender="entity_1",
+                               content="You have a TASK.md in your workspace. Follow its rules.")
+        notices = tools.read_interaction_event(brief["id"])["_notifications"]
+        self.assertIn("FILES NAMED BY AN ENTITY", notices[0])
+        self.assertIn(str((self.paths.root / "TASK.md").resolve()), notices[0])
+        self.assertNotIn("_notifications", tools.read_interaction_event(brief["id"]))
+
+        again, _ = client.send("room-1", sender="entity_1",
+                               content="Again: TASK.md is your lifegoal.")
+        recorded = tools.record_directive(again["id"], "TASK.md is your lifegoal.")
+        self.assertIn("FILES NAMED BY AN ENTITY", recorded["_notifications"][0])
+        tools.record_directive(again["id"], "Commit small, working increments.",
+                               source_path="TASK.md")
+        last, _ = client.send("room-1", sender="entity_1", content="Keep TASK.md in mind.")
+        self.assertNotIn("_notifications", tools.read_interaction_event(last["id"]))
+
     def test_request_review_runs_in_a_fresh_context(self) -> None:
         *_, tools = self.components()
         self.assertEqual(tools.request_review("The cache is never stale.")["status"], "error")
