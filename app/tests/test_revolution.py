@@ -1542,6 +1542,40 @@ class RevolutionCase(unittest.TestCase):
         self.assertEqual(tools.retire_directive("D1", lifted["id"])["status"], "retired")
         self.assertNotIn("STANDING DIRECTIVES", agent.system_prompt())
 
+    def test_directives_can_quote_a_brief_the_entity_named(self) -> None:
+        *_, tools = self.components()
+        brief = self.paths.space / "BRIEF.md"
+        brief.parent.mkdir(parents=True, exist_ok=True)
+        brief.write_text("# Brief\n\n7. Keep a log. After each session,\n   append to the log.\n")
+        other = self.paths.space / "NOTES.md"
+        other.write_text("Keep a log. After each session, append to the log.\n")
+        client = ArtificiumClient(self.root)
+        pointer, _ = client.send("room-1", sender="entity_1",
+                                 content="Your brief is in BRIEF.md; follow it.")
+
+        with self.assertRaisesRegex(ValueError, "does not name `NOTES.md`"):
+            tools.record_directive(pointer["id"], "Keep a log.", source_path=str(other))
+        with self.assertRaisesRegex(ValueError, "paraphrase"):
+            tools.record_directive(pointer["id"], "Log every session.", source_path=str(brief))
+        recorded = tools.record_directive(
+            pointer["id"], "Keep a log. After each session, append to the log.",
+            source_path=str(brief),
+        )
+        self.assertEqual(recorded["directive"]["source_path"], str(brief))
+        agent = Artificium(self.paths, engine=FakeEngine([]), console=Console(quiet=True))
+        self.assertIn(
+            f'BRIEF.md (via event {pointer["id"]}): "Keep a log. After each session, '
+            'append to the log."',
+            agent.system_prompt(),
+        )
+        brief.write_text("# Brief\n\nNothing about logs any more.\n")
+        self.assertIn("(no longer in BRIEF.md; ask whether it still holds)", agent.system_prompt())
+
+        lifted, _ = client.send("room-1", sender="entity_1", content="Drop the log rule.")
+        self.assertEqual(
+            tools.retire_directive(recorded["directive"]["id"], lifted["id"])["status"], "retired"
+        )
+
     def test_request_review_runs_in_a_fresh_context(self) -> None:
         *_, tools = self.components()
         self.assertEqual(tools.request_review("The cache is never stale.")["status"], "error")

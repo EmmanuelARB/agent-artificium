@@ -162,8 +162,11 @@ class InteractionToolsMixin:
             "known_interaction_ids": known[:20],
         }
 
-    def record_directive(self, event_id: str, quote: str) -> dict[str, Any]:
-        return DirectiveStore(self.paths, self.records).record(event_id, quote)
+    def record_directive(
+        self, event_id: str, quote: str, source_path: str | None = None
+    ) -> dict[str, Any]:
+        source = self._resolve(source_path) if source_path else None
+        return DirectiveStore(self.paths, self.records).record(event_id, quote, source)
 
     def retire_directive(self, directive_id: str, event_id: str) -> dict[str, Any]:
         return DirectiveStore(self.paths, self.records).retire(directive_id, event_id)

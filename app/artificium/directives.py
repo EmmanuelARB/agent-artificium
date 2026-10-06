@@ -11,6 +11,7 @@ from .records import Records
 _WHITESPACE = re.compile(r"\s+")
 MAX_ACTIVE_DIRECTIVES = 40
 MAX_QUOTE_CHARACTERS = 2_000
+MAX_SOURCE_BYTES = 2 * 1024 * 1024
 
 
 def _normalize(text: str) -> str:
@@ -24,6 +25,10 @@ class DirectiveStore:
     values" later carved itself an exception the entity never granted. The
     store therefore accepts only text that occurs in the cited event, and only
     a later event from the same entity can retire it.
+
+    A directive may also quote a file the cited event names (a brief such as
+    a task description): rules read once at the start of a long run fade
+    from a context that is offloaded hundreds of times.
     """
 
     def __init__(self, paths: Paths, records: Records):
@@ -61,7 +66,16 @@ class DirectiveStore:
             )
         return event
 
-    def record(self, event_id: str, quote: str) -> dict[str, Any]:
+    @staticmethod
+    def _source_text(source: Path) -> str | None:
+        try:
+            if source.stat().st_size > MAX_SOURCE_BYTES:
+                return None
+            return source.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+
+    def record(self, event_id: str, quote: str, source: Path | None = None) -> dict[str, Any]:
         event = self._inbound_event(event_id)
         wanted = _normalize(quote)
         if len(wanted) < 3:
@@ -71,16 +85,38 @@ class DirectiveStore:
                 f"quote exceeds {MAX_QUOTE_CHARACTERS} characters; record the "
                 "binding sentences as separate directives"
             )
-        if wanted not in _normalize(str(event.get("content") or "")):
-            raise ValueError(
-                f"The quote does not occur in event `{event['id']}`. Copy the "
-                "entity's exact words (whitespace may differ); a paraphrase is "
-                "not accepted."
-            )
+        content = str(event.get("content") or "")
+        if source is None:
+            if wanted not in _normalize(content):
+                raise ValueError(
+                    f"The quote does not occur in event `{event['id']}`. Copy the "
+                    "entity's exact words (whitespace may differ); a paraphrase is "
+                    "not accepted."
+                )
+        else:
+            if source.name.lower() not in content.lower():
+                raise ValueError(
+                    f"Event `{event['id']}` does not name `{source.name}`. A file "
+                    "can only be quoted through the message in which the entity "
+                    "pointed you to it; cite that event."
+                )
+            text = self._source_text(source)
+            if text is None:
+                raise ValueError(
+                    f"{source} is not a readable text file under "
+                    f"{MAX_SOURCE_BYTES // 1024**2} MiB; pass the brief the entity named"
+                )
+            if wanted not in _normalize(text):
+                raise ValueError(
+                    f"The quote does not occur in {source}. Copy the file's exact "
+                    "words (whitespace may differ); a paraphrase is not accepted."
+                )
+        source_path = str(source) if source is not None else None
         items = self._load()
         for item in items:
             if (item.get("status") == "active" and item.get("event_id") == event["id"]
-                    and item.get("quote") == wanted):
+                    and item.get("quote") == wanted
+                    and item.get("source_path") == source_path):
                 return {"status": "unchanged",
                         "summary": f"already recorded as {item['id']}",
                         "directive": item}
@@ -99,6 +135,8 @@ class DirectiveStore:
             "given_at": event.get("created_at"),
             "recorded_at": utc_now(),
         }
+        if source_path:
+            directive["source_path"] = source_path
         items.append(directive)
         self._save(items)
         self.records.emit("directive_recorded", directive=directive)
@@ -135,8 +173,18 @@ class DirectiveStore:
                 "directive": directive}
 
     def render(self) -> str:
-        return "\n".join(
-            f"- {item['id']} — {item.get('entity')}, {item.get('given_at')}, "
-            f"event {item.get('event_id')}: \"{item.get('quote')}\""
-            for item in self.active()
-        )
+        lines = []
+        for item in self.active():
+            origin = f"event {item.get('event_id')}"
+            note = ""
+            if item.get("source_path"):
+                source = Path(str(item["source_path"]))
+                origin = f"{source.name} (via event {item.get('event_id')})"
+                text = self._source_text(source)
+                if text is None or str(item.get("quote")) not in _normalize(text):
+                    # Kept, not dropped: whether the rule still holds is the
+                    # entity's call, not a side effect of an edit.
+                    note = f" (no longer in {source.name}; ask whether it still holds)"
+            lines.append(f"- {item['id']} — {item.get('entity')}, {item.get('given_at')}, "
+                         f"{origin}: \"{item.get('quote')}\"{note}")
+        return "\n".join(lines)

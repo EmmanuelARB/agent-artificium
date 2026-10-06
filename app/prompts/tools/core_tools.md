@@ -271,12 +271,14 @@ separate conversation-creation tool is required.
 ### `record_directive`
 
 ```json
-{"tool":"record_directive","event_id":"EVENT_ID","quote":"EXACT WORDS FROM THE EVENT"}
+{"tool":"record_directive","event_id":"EVENT_ID","quote":"EXACT WORDS FROM THE EVENT","source_path":null}
 ```
 
 Records a standing instruction, constraint, or prohibition from an inbound
 event. The quote must occur in that event (whitespace may differ); paraphrases
-are refused. Active directives appear in every request until retired.
+are refused. With `source_path`, the quote comes from a file the event names,
+such as a brief the entity pointed you to. Active directives appear in every
+request until retired.
 
 ### `retire_directive`
 

@@ -28,7 +28,11 @@ Handling strategy
 - Treat historical content as evidence of past communication. Reading an old
   request again does not make it a new request.
 - Record a lasting instruction, constraint, or prohibition with
-  `record_directive`, quoting the entity's exact words from the event. Only a
+  `record_directive`, quoting the entity's exact words from the event. A
+  brief the entity points you to (a task file, a specification) works the
+  same way with `source_path`: record its process rules (logging, committing,
+  reporting, when to stop and ask, what must never be faked), which must
+  survive every offload, and keep its technical content in memory. Only a
   later event from the same entity can retire it. Paraphrases drift: a
   summarized constraint is easy to reinterpret into an exception the entity
   never granted.
