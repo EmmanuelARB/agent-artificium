@@ -89,6 +89,8 @@ python3 artificium.py chat
 
 Chat opens straight onto the prompt: it resumes your latest thread as the entity you used last (`user_1` the first time). `--entity NAME` picks and remembers who you are, `--new` starts a fresh thread, and `--name TITLE` starts one with that title.
 
+A message can span several lines: end a line with `\` to continue on the next, type `/paste` and finish with a line holding only `.`, or type `/edit` to write it in `$EDITOR`. Ctrl-C inside an unfinished draft discards the draft instead of closing the chat.
+
 *Tip: for a graphical chat, ask the agent to build a browser-based chat UI and send you the link.*
 
 **Watch the life-loop.** In another terminal, follow its thoughts, tool use, token usage, and state changes:

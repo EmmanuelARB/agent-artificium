@@ -9,17 +9,23 @@ that patch.
 from __future__ import annotations
 
 import datetime as dt
+import os
+import shlex
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import unicodedata
-from typing import Any
+from typing import Any, Callable
 
 from . import cli as _cli
 from .filesystem import Paths, atomic_write_json, read_json, safe_identifier, sortable_id
 from .interactions import ArtificiumClient
 
 DEFAULT_ENTITY = "user_1"
+CONTINUATION_PROMPT = "... "
+PASTE_PROMPT = "paste> "
 
 
 def _local_time(value: Any) -> str:
@@ -172,6 +178,85 @@ def _choose_interaction(
     return interaction_id
 
 
+def _edit_message() -> str:
+    """Compose a message in ``$VISUAL``/``$EDITOR`` (else nano or vi)."""
+
+    command = shlex.split(os.environ.get("VISUAL") or os.environ.get("EDITOR") or "")
+    if not command:
+        found = next((tool for tool in ("nano", "vi") if shutil.which(tool)), None)
+        if found is None:
+            print("No editor found; set $EDITOR, or use /paste or a trailing backslash.")
+            return ""
+        command = [found]
+    with tempfile.TemporaryDirectory() as directory:
+        draft = os.path.join(directory, "message.txt")
+        with open(draft, "w", encoding="utf-8"):
+            pass
+        try:
+            subprocess.run([*command, draft], check=True)
+            with open(draft, encoding="utf-8", errors="replace") as handle:
+                return handle.read().strip()
+        except (OSError, subprocess.SubprocessError) as error:
+            print(f"Editor failed ({error}); nothing was sent.")
+            return ""
+
+
+def _read_chat_message(
+    prompt: str,
+    set_prompt: Callable[[str], None],
+    *,
+    read: Callable[[str], str] = input,
+    edit: Callable[[], str] = _edit_message,
+) -> str:
+    """Read one message, which may span several lines.
+
+    A line ending in a backslash continues on the next one; ``/paste`` takes
+    lines until one holds only ``.``; ``/edit`` opens an editor. Ctrl-C while
+    a multi-line draft is open discards the draft instead of closing the
+    chat. ``set_prompt`` tells the asynchronous printer which prompt to
+    repaint after the agent's output arrives.
+    """
+
+    lines: list[str] = []
+    current = prompt
+    try:
+        while True:
+            set_prompt(current)
+            line = read(current)
+            if not lines and line.strip() == "/edit":
+                return edit()
+            if not lines and line.strip() == "/paste":
+                return _read_pasted(read, set_prompt)
+            if line.endswith("\\"):
+                lines.append(line[:-1])
+                current = CONTINUATION_PROMPT
+                continue
+            lines.append(line)
+            return "\n".join(lines).strip()
+    except KeyboardInterrupt:
+        if not lines:
+            raise
+        print("\n(draft discarded)")
+        return ""
+    finally:
+        set_prompt(prompt)
+
+
+def _read_pasted(read: Callable[[str], str], set_prompt: Callable[[str], None]) -> str:
+    print("Paste your message, then finish with a line holding only `.` (or Ctrl-D).")
+    set_prompt(PASTE_PROMPT)
+    lines: list[str] = []
+    while True:
+        try:
+            line = read(PASTE_PROMPT)
+        except EOFError:
+            break
+        if line.strip() == ".":
+            break
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
 def _chat_repl(
     paths: Paths,
     entity: str | None,
@@ -197,6 +282,9 @@ def _chat_repl(
     input_active = threading.Event()
     output_lock = threading.Lock()
     input_prompt = _chat_input_prompt(entity)
+    # The prompt currently on screen, which differs from `input_prompt`
+    # while a multi-line draft is open.
+    shown = {"prompt": input_prompt}
     try:
         import readline  # noqa: F401
     except ImportError:
@@ -211,12 +299,12 @@ def _chat_repl(
                 seen.add(event_id)
                 with output_lock:
                     if input_active.is_set():
-                        _clear_chat_input(input_prompt, readline)
+                        _clear_chat_input(shown["prompt"], readline)
                     else:
                         print("\r\033[2K", end="", flush=True)
                     _print_event(event, local_entity=entity)
                     if input_active.is_set():
-                        _restore_chat_input(input_prompt, readline)
+                        _restore_chat_input(shown["prompt"], readline)
 
     thread = threading.Thread(target=poll, daemon=True)
     thread.start()
@@ -228,7 +316,9 @@ def _chat_repl(
                 # Give the prompt to Readline so its cursor and wrapping math
                 # includes the visible label. Asynchronous output explicitly
                 # clears and restores every physical row occupied by the draft.
-                content = input(input_prompt).strip()
+                content = _read_chat_message(
+                    input_prompt, lambda value: shown.update(prompt=value)
+                )
             finally:
                 input_active.clear()
             if not content:
@@ -244,6 +334,9 @@ def _chat_repl(
                     "Commands:\n"
                     "  /history                 show the complete thread\n"
                     "  /attach PATH MESSAGE     send one attachment\n"
+                    "  /edit                    write a long message in $EDITOR\n"
+                    "  /paste                   paste lines; finish with a line of `.`\n"
+                    "  (a line ending in \\ continues on the next line)\n"
                     "  /status                  show runtime status path\n"
                     "  /quit                    close this client only"
                 )
