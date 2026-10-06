@@ -10,6 +10,7 @@ from typing import Any
 from .artifacts import ArtifactTracker
 from .filesystem import (
     atomic_write_text,
+    json_dumps,
     backup_before_overwrite,
     check_shrink_guard,
     clear_partial_read,
@@ -82,11 +83,17 @@ class FileToolsMixin:
             )
         size = target.stat().st_size
         explicit_bound = max_characters is not None or max_chars is not None or start is not None
+        # A read the result cap would cut must not be offered at all: the cap
+        # keeps only a head and a tail, silently dropping the middle of a file
+        # the agent then believes it has read. Windows are sized to fit.
+        window = self._read_window_limit()
         limit = min(
             int(max_characters or max_chars or self.config.max_direct_read_chars),
             self.config.max_direct_read_chars,
+            window,
         )
-        if not explicit_bound and int(start_line) <= 1 and size > limit:
+        if (not explicit_bound and int(start_line) <= 1
+                and size > self.config.max_direct_read_chars):
             # Nothing was actually read; that is even less than a partial
             # window, so a later overwrite should get the same warning.
             record_partial_read(
@@ -116,7 +123,9 @@ class FileToolsMixin:
                 offset = handle.tell()
                 content = handle.read(limit)
                 end = handle.tell()
-        complete = offset == 0 and end >= size
+        result = self._fit_read_result(target, offset, end, size, content, int(start_line), start)
+        complete = result["complete"]
+        end = result["end_byte"]
         if complete:
             clear_partial_read(self.paths, target)
         else:
@@ -125,17 +134,51 @@ class FileToolsMixin:
                 target,
                 {"start_byte": offset, "end_byte": end, "size_bytes": size, "at": utc_now()},
             )
-        return {
-            "status": "ok",
-            "summary": "bounded file content read",
-            "path": str(target),
-            "start_byte": offset,
-            "end_byte": end,
-            "size_bytes": size,
-            "complete": complete,
-            "truncated": end < size,
-            "content": content,
-        }
+        return result
+
+    def _read_window_limit(self) -> int:
+        # Room for the result's other fields and JSON escaping of the content.
+        return max(1_000, int(self.config.max_tool_output_chars * 0.85) - 1_000)
+
+    def _fit_read_result(
+        self, target: Path, offset: int, end: int, size: int, content: str,
+        start_line: int, start: int | None,
+    ) -> dict[str, Any]:
+        """Shrink a window until its JSON result fits the tool-output cap,
+        and say exactly where the next window starts."""
+
+        cap = self.config.max_tool_output_chars
+        while True:
+            complete = offset == 0 and end >= size
+            result: dict[str, Any] = {
+                "status": "ok",
+                "summary": "bounded file content read",
+                "path": str(target),
+                "start_byte": offset,
+                "end_byte": end,
+                "size_bytes": size,
+                "complete": complete,
+                "truncated": end < size,
+                "content": content,
+            }
+            if end < size:
+                if start is None and "\n" in content:
+                    # Stop at the last complete line so the next window
+                    # starts cleanly on a line boundary.
+                    content = content[: content.rindex("\n") + 1]
+                    end = offset + len(content.encode("utf-8"))
+                    next_line = start_line + content.count("\n")
+                    result.update(content=content, end_byte=end, next_start_line=next_line,
+                                  summary=f"partial read: file continues; read the rest with "
+                                          f"start_line={next_line}")
+                else:
+                    result.update(next_start=end,
+                                  summary=f"partial read: file continues; read the rest with "
+                                          f"start={end}")
+            if len(json_dumps(result, pretty=True)) <= cap or len(content) < 200:
+                return result
+            content = content[: int(len(content) * 0.85)]
+            end = offset + len(content.encode("utf-8"))
 
     # self.txt and mind/meta_memory.md are agent-authored maps/identity files
     # that are expected to be rewritten wholesale (including shrinking) as

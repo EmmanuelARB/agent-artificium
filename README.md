@@ -749,7 +749,7 @@ A directive is a lasting instruction from an entity, stored as its exact words f
 
 `load_attachment` and `compact_context` remain as compatibility operations; `load_images`, text reads, and `offload_working_memory` replace them.
 
-Ordinary reads are bounded; oversized output is reported with source and output paths instead of passing as a complete reading. Use Infinite Attention for large text.
+Ordinary reads are bounded; oversized output is reported with source and output paths instead of passing as a complete reading. `read_file` sizes each window to fit one tool result, stops at a line boundary, and says where to continue (`start_line=N`), so a file larger than one result is read in pieces rather than cut to its head and tail. Use Infinite Attention for large text.
 
 `run_shell` is synchronous, with a 120-second default timeout and a per-call maximum of 3,600 seconds. Each command runs in its own process session with stdin closed, so a command waiting for input returns immediately and a timeout kills the whole process group, background children included. Large output keeps the head and tail of stdout and stderr separately. A timeout returns guidance to check for surviving processes and saved output, and to use background execution for long work; the harness does not relaunch the command.
 

@@ -227,6 +227,33 @@ class HeadTailPreviewCase(ToolsBaseCase):
         self.assertIn("Z" * 100, full)
 
 
+    def test_read_file_windows_fit_the_output_cap_and_say_where_to_continue(self) -> None:
+        # Between the two limits: readable directly, but larger than one
+        # tool result may carry. It used to come back as a head and a tail.
+        tools, _ = self._tools(max_tool_output_chars=20_000, max_direct_read_chars=60_000)
+        lines = [f"{index:05d} rule \"{index}\" applies\n" for index in range(1_400)]
+        brief = tools.paths.root / "BRIEF.md"
+        brief.write_text("".join(lines))
+        self.assertGreater(len(brief.read_text()), 30_000)
+
+        read, start_line = [], 1
+        while True:
+            result = tools.execute(ToolIntent(
+                id=f"read{start_line}", name="read_file",
+                arguments={"path": str(brief), "start_line": start_line},
+            )).result
+            self.assertEqual(result["status"], "ok")
+            self.assertLessEqual(len(json_dumps(result, pretty=True)),
+                                 tools.config.max_tool_output_chars)
+            read.append(result["content"])
+            if result["complete"] or not result["truncated"]:
+                break
+            self.assertIn(f"start_line={result['next_start_line']}", result["summary"])
+            start_line = result["next_start_line"]
+        self.assertGreater(len(read), 1)
+        self.assertEqual("".join(read), brief.read_text())
+
+
 class ToolExecutionDurationCase(ToolsBaseCase):
     def test_duration_seconds_is_recorded_on_emit_and_life_records(self) -> None:
         tools, records = self._tools()
