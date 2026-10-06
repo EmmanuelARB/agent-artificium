@@ -16,8 +16,10 @@ import unicodedata
 from typing import Any
 
 from . import cli as _cli
-from .filesystem import Paths, read_json, safe_identifier, sortable_id
+from .filesystem import Paths, atomic_write_json, read_json, safe_identifier, sortable_id
 from .interactions import ArtificiumClient
+
+DEFAULT_ENTITY = "user_1"
 
 
 def _local_time(value: Any) -> str:
@@ -120,24 +122,44 @@ def _restore_chat_input(prompt: str, readline_module: Any | None) -> None:
     sys.stdout.flush()
 
 
+def _chat_entity(paths: Paths, supplied: str | None) -> str:
+    """Return who is chatting without asking: the flag, else the last entity
+    used on this install, else the default. An explicit choice is remembered."""
+
+    store = paths.runtime / "chat-client.json"
+    if supplied:
+        entity = safe_identifier(supplied, label="entity id")
+        atomic_write_json(store, {"entity": entity})
+        return entity
+    saved = read_json(store, {})
+    try:
+        return safe_identifier(str(saved.get("entity") or ""), label="entity id")
+    except (AttributeError, ValueError):
+        return DEFAULT_ENTITY
+
+
 def _choose_interaction(
     client: ArtificiumClient,
     entity: str,
     supplied: str | None,
     name: str | None,
+    new: bool = False,
 ) -> str:
+    """Pick the thread to open without prompting.
+
+    Opens the given thread, else the most recent one of this entity; a new
+    thread is made only when asked for (``new`` or a ``name``) or when the
+    entity has none yet.
+    """
+
     if supplied:
         client.interactions.ensure(supplied, name=name, participants=[entity])
         return supplied
     existing = client.interactions_for(entity)
-    if existing:
+    if existing and not new and not name:
         latest = sorted(existing, key=lambda item: str(item.get("updated_at") or ""))[-1]
-        answer = input(
-            f"Resume `{latest['name']}` ({latest['id']})? [Y/n]: "
-        ).strip().lower()
-        if answer in {"", "y", "yes"}:
-            return str(latest["id"])
-    interaction_name = name or input("Interaction name [chat]: ").strip() or "chat"
+        return str(latest["id"])
+    interaction_name = name or "chat"
     base = "".join(
         char.lower() if char.isalnum() else "-" for char in interaction_name
     ).strip("-") or "chat"
@@ -150,20 +172,23 @@ def _choose_interaction(
     return interaction_id
 
 
-def _chat_repl(paths: Paths, entity: str | None, interaction: str | None, name: str | None) -> None:
+def _chat_repl(
+    paths: Paths,
+    entity: str | None,
+    interaction: str | None,
+    name: str | None,
+    new: bool = False,
+) -> None:
     if not sys.stdin.isatty():
         raise RuntimeError("chat requires an interactive terminal")
     client = ArtificiumClient(paths.install)
-    entity = safe_identifier(
-        entity or input("Your entity name/ID [user_1]: ").strip() or "user_1",
-        label="entity id",
-    )
-    interaction_id = _choose_interaction(client, entity, interaction, name)
+    entity = _chat_entity(paths, entity)
+    interaction_id = _choose_interaction(client, entity, interaction, name, new)
     seen = {str(item.get("id")) for item in client.events(interaction_id)}
     print("\n╭─ Artificium terminal interaction")
     print(f"│ Thread: {interaction_id}")
     print(f"│ You:    {entity}")
-    print("│ Ctrl-C or /quit closes ONLY this chat client.")
+    print("│ /help lists commands; Ctrl-C or /quit closes ONLY this chat client.")
     print("╰─ TO STOP ARTIFICIUM: python3 artificium.py stop\n")
     for event in client.events(interaction_id):
         _print_event(event, local_entity=entity)

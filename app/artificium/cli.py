@@ -66,6 +66,7 @@ from .cli_service import (
 )
 from .cli_chat import (
     _chat_display_width,
+    _chat_entity,
     _chat_input_prompt,
     _chat_input_rows,
     _chat_line_buffer,
@@ -259,7 +260,11 @@ def build_parser() -> argparse.ArgumentParser:
     chat = commands.add_parser("chat", help="Open a terminal interaction client")
     chat.add_argument("--entity")
     chat.add_argument("--interaction")
-    chat.add_argument("--name")
+    chat.add_argument("--name", help="Name for a new thread (implies --new)")
+    chat.add_argument(
+        "--new", action="store_true",
+        help="Start a new thread instead of resuming the latest one",
+    )
 
     send = commands.add_parser("send", help="Write one inbound interaction event")
     send.add_argument("content")
@@ -432,7 +437,7 @@ def _dispatch(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "chat":
             _start_background(paths)
-            _chat_repl(paths, args.entity, args.interaction, args.name)
+            _chat_repl(paths, args.entity, args.interaction, args.name, args.new)
             return 0
         if args.command == "send":
             event, path = ArtificiumClient(paths.install).send(

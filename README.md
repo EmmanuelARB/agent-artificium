@@ -87,6 +87,8 @@ An existing `config.json` keeps the values it already has.
 python3 artificium.py chat
 ```
 
+Chat opens straight onto the prompt: it resumes your latest thread as the entity you used last (`user_1` the first time). `--entity NAME` picks and remembers who you are, `--new` starts a fresh thread, and `--name TITLE` starts one with that title.
+
 *Tip: for a graphical chat, ask the agent to build a browser-based chat UI and send you the link.*
 
 **Watch the life-loop.** In another terminal, follow its thoughts, tool use, token usage, and state changes:
@@ -614,7 +616,7 @@ Run commands as `python3 artificium.py COMMAND`, from any directory; the launche
 | Command | Purpose |
 |---|---|
 | `setup` | Connect the model and prepare the instance; `--no-launch` skips the launcher menu. |
-| `chat` | Start or reuse the background agent and open a terminal interaction client. |
+| `chat` | Start or reuse the background agent and open a terminal interaction client (resumes the latest thread; `--entity`, `--new`, `--name`). |
 | `start` / `stop` / `restart` | Manage the background life-loop; `restart` applies saved configuration. `stop` escalates to a forced stop if needed. |
 | `run` / `run --once` | Run continuously in the foreground, or do a bounded amount of work and return. |
 | `watch` | Follow the life-loop trace without starting the agent. |

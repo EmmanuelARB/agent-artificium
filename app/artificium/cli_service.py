@@ -145,10 +145,7 @@ def _launcher(paths: Paths) -> None:
     print("2. Watch the life-loop")
     choice = input("\nChoose [1]: ").strip() or "1"
     if choice == "1":
-        entity = safe_identifier(
-            input("Your entity name/ID [user_1]: ").strip() or "user_1",
-            label="entity id",
-        )
+        entity = _cli._chat_entity(paths, None)
         client = ArtificiumClient(paths.install)
         interaction_id = _cli._choose_interaction(client, entity, None, None)
         pid = _start_background(paths)
