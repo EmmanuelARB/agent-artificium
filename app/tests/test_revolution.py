@@ -1499,6 +1499,12 @@ class RevolutionCase(unittest.TestCase):
                                in_reply_to=second["event"]["id"])
         self.assertEqual(client.open_decisions("room-d"), [])
         self.assertEqual(client.open_decisions(), [])
+        traced = [json.loads(line) for line in
+                  self.paths.life_loop_log.read_text().splitlines()
+                  if '"decision_requested"' in line]
+        self.assertEqual([item["open_decisions"] for item in traced], [1, 2])
+        self.assertEqual(traced[0]["options"], ["clang", "gcc"])
+        self.assertEqual(traced[1]["preview"], "May I delete the cache?")
 
     def test_old_events_and_updates_are_never_open_decisions(self) -> None:
         *_, interactions, _est, _w, _m, _a, tools = self.components()

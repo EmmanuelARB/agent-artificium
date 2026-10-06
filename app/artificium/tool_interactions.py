@@ -139,6 +139,8 @@ class InteractionToolsMixin:
             in_reply_to=in_reply_to,
             **extra,
         )
+        if decision:
+            self._announce_decision(event)
         return {
             "status": "sent",
             "summary": ("decision sent; it stays pinned for the user until they "
@@ -152,6 +154,23 @@ class InteractionToolsMixin:
                 )
             ],
         }
+
+    def _announce_decision(self, event: dict[str, Any]) -> None:
+        """Show a decision in the life-loop trace, which ``watch`` follows."""
+
+        counter = getattr(self.interactions, "open_decisions", None)
+        try:
+            open_count = len(counter()) if callable(counter) else None
+        except OSError:
+            open_count = None
+        self.records.life(
+            "decision_requested",
+            interaction_id=event.get("interaction_id"),
+            event_id=event.get("id"),
+            preview=str(event.get("content") or "")[:300],
+            options=event.get("options") or [],
+            open_decisions=open_count,
+        )
 
     @staticmethod
     def _check_decision(decision: bool, options: list[str] | None) -> dict[str, Any] | None:

@@ -647,6 +647,19 @@ def render_sleep_started(record, options, session=None):
     return lines
 
 
+def render_decision_requested(record, options, session=None):
+    count = record.get("open_decisions")
+    waiting = f" ({count} open)" if isinstance(count, int) and count > 0 else ""
+    limit = max(20, options.width - 24)
+    text = " ".join(str(record.get("preview") or "").split())
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "…"
+    lines = [f"[decision] waiting for the user{waiting}: {text}"]
+    for number, choice in enumerate(record.get("options") or [], 1):
+        lines.append(f"  {number}) {choice}")
+    return lines
+
+
 def render_sleep_ended(record, options, session=None):
     reason = str(record.get("reason") or "unknown")
     asleep = ""
@@ -677,6 +690,7 @@ _RENDERERS: dict[str, Callable[[dict, RenderOptions, "WatchSession | None"], lis
     events.KIND_TURN_INTERRUPTED: render_turn_interrupted,
     events.KIND_SLEEP_STARTED: render_sleep_started,
     events.KIND_SLEEP_ENDED: render_sleep_ended,
+    events.KIND_DECISION_REQUESTED: render_decision_requested,
     events.KIND_CONTEXT_USAGE: render_context_usage,
     events.KIND_CONTEXT_COMPACTED: render_memory_event,
     events.KIND_ENGINE_REQUEST: render_engine_request,

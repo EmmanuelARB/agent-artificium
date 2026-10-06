@@ -85,6 +85,25 @@ class EventRegistryCoverageCase(unittest.TestCase):
             self.assertIsInstance(lines, list)
 
 
+class DecisionRenderCase(unittest.TestCase):
+    def test_watch_shows_a_decision_with_its_options(self) -> None:
+        options = display.RenderOptions(color=False, width=80, timestamps=False)
+        lines = display.render_event_body({
+            "kind": "decision_requested", "timestamp": _iso(), "open_decisions": 2,
+            "preview": "Which toolchain should I\nuse for the build?",
+            "options": ["clang", "gcc"],
+        }, options)
+        self.assertEqual(lines[0],
+                         "[decision] waiting for the user (2 open): "
+                         "Which toolchain should I use for the build?")
+        self.assertEqual(lines[1:], ["  1) clang", "  2) gcc"])
+
+    def test_a_sparse_record_still_renders(self) -> None:
+        options = display.RenderOptions(color=False, timestamps=False)
+        lines = display.render_event_body({"kind": "decision_requested"}, options)
+        self.assertEqual(lines, ["[decision] waiting for the user: "])
+
+
 class RenderingCase(unittest.TestCase):
     def setUp(self) -> None:
         self.options = display.RenderOptions(color=False, width=100, max_lines=6, full=False, timestamps=True)
