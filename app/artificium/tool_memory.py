@@ -97,13 +97,15 @@ class MemoryToolsMixin:
                 ],
             }
         if not state.get("working_memory_offload_pending"):
-            return {
-                "status": "reflection_required",
-                "summary": "request offload_working_memory once before confirming reflection",
-                "_notifications": [
-                    self.prompts.event("working_memory_offload_reflection")
-                ],
-            }
+            # A confirmation without a pending reflection is treated as the
+            # first step: repeating the same refusal made agents loop.
+            started = self.offload_working_memory(path=path, reflection_complete=False)
+            started["summary"] = (
+                "no offload_working_memory reflection was pending, so this call started one: "
+                "reflect on the prompt below, then call offload_working_memory again with "
+                "reflection_complete=true"
+            )
+            return started
         remembered = self.memory.save(
             path=path,
             content=checkpoint,
@@ -245,10 +247,13 @@ class MemoryToolsMixin:
                 ],
             }
         if not state.get("self_revision_pending"):
-            return {
-                "status": "reflection_required",
-                "summary": "request revise_self once before confirming reflection",
-            }
+            started = self.revise_self(content, reason, source_event_ids)
+            started["summary"] = (
+                "no revise_self reflection was pending, so this call started one: "
+                "reflect on the prompt below, then call revise_self again with "
+                "reflection_complete=true"
+            )
+            return started
         if len(content.strip()) < 20:
             raise ValueError("Self replacement is too short to remain meaningful")
         previous = self.paths.self_file.read_text(encoding="utf-8", errors="replace")

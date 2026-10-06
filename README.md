@@ -214,7 +214,7 @@ Self can describe an agent that responds and sleeps, one that explores a subject
 
 The life-loop gives the agent opportunities to act on startup, on incoming events, and on unfinished work. A completed generation with no tool calls automatically continues unless the agent is sleeping or the runtime is stopped or paused for error handling. Continuation has no interval and never interrupts generation or tool execution. Continuous work can span any number of inferences and tool calls, with no round-count or elapsed-time limit.
 
-When no message needs attention, Self supplies direction. The agent can continue a project, investigate, build a tool, organize memory, or sleep. The `sleep` tool asks for reflection first, then waits until an event or a timer wakes it.
+When no message needs attention, Self supplies direction. The agent can continue a project, investigate, build a tool, organize memory, or sleep. The `sleep` tool asks for reflection first, then waits until an event or a timer wakes it. As with offloading and Self revision, a confirmation sent before any reflection was requested starts the reflection instead of being refused, so the next confirmation succeeds.
 
 Sleep uses no inference tokens. The process must keep running to notice wake conditions, and continued work requires an available model backend and compute budget. The scheduler can arrange a future wake; offloading preserves a useful continuation for the next phase of work.
 

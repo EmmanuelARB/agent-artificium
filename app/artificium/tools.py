@@ -573,11 +573,15 @@ class ToolRegistry(
                 "_notifications": [self.prompts.event("pre_sleep")],
             }
         if not state.get("sleep_reflection_pending"):
-            return {
-                "status": "reflection_required",
-                "summary": "request sleep once before confirming reflection",
-                "_notifications": [self.prompts.event("pre_sleep")],
-            }
+            # A confirmation without a pending reflection is treated as the
+            # first step: repeating the same refusal made agents loop.
+            started = self.sleep(mode, seconds, reflection_complete=False)
+            started["summary"] = (
+                "no sleep reflection was pending, so this call started one: "
+                "reflect on the prompt below, then call sleep again with "
+                "reflection_complete=true"
+            )
+            return started
         state.pop("sleep_reflection_pending", None)
         self._save_control(state)
         self.sleep_request = SleepRequest(mode, float(seconds) if seconds is not None else None)

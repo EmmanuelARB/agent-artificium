@@ -1896,6 +1896,24 @@ class RevolutionCase(unittest.TestCase):
         self.assertIn("uncommitted changes", events[0])
         self.assertIn("workspace repository", events[0])
 
+    def test_a_premature_confirmation_starts_the_reflection_instead_of_looping(self) -> None:
+        *_, working, _, _, tools = self.components()
+        early = tools.sleep(mode="until_event", reflection_complete=True)
+        self.assertEqual(early["status"], "reflection_required")
+        self.assertIn("this call started one", early["summary"])
+        self.assertIn("PRE-SLEEP", early["_notifications"][0])
+        self.assertEqual(tools.sleep(mode="until_event", reflection_complete=True)["status"],
+                         "sleeping")
+
+        working.append({"role": "assistant", "content": "x" * 2_000}, origin="test")
+        arguments = dict(path="context/premature", retrieve_when="Resume the premature case.",
+                         checkpoint="Objective unchanged. Continue the premature-confirmation case.",
+                         reflection_complete=True)
+        early = tools.offload_working_memory(**arguments)
+        self.assertEqual(early["status"], "reflection_required")
+        self.assertIn("this call started one", early["summary"])
+        self.assertEqual(tools.offload_working_memory(**arguments)["status"], "offloaded")
+
     def test_self_revision_is_reflective_and_versioned(self) -> None:
         *_, tools = self.components()
         first = tools.revise_self(
