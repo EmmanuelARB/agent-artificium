@@ -1518,6 +1518,16 @@ class RevolutionCase(unittest.TestCase):
         path.write_text(json.dumps(data))
         self.assertEqual(client.open_decisions("room-o"), [])
 
+    def test_the_decision_flag_is_taught_in_the_always_on_prompt_and_the_catalog(self) -> None:
+        # The flag only helps if the agent reads it where it learns to talk to
+        # people, and if it covers an agent that keeps working while it asks.
+        always = " ".join(self.prompts.always().split())
+        self.assertIn("`decision` set to true", always)
+        self.assertIn("even if you keep working meanwhile", always)
+        catalog = " ".join(self.prompts.tool_catalog().split())
+        self.assertIn("even if you keep working meanwhile", catalog)
+        self.assertNotIn("before you can go on", catalog)
+
     def test_malformed_decision_arguments_send_nothing(self) -> None:
         *_, tools = self.components()
         ArtificiumClient(self.root).send("room-m", sender="entity_1", content="Hello")

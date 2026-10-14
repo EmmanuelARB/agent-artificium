@@ -266,10 +266,11 @@ Writes one outbound event to the exact interaction. Plain life-loop text is
 logged but is not delivered externally. An unknown interaction ID, or an
 `in_reply_to` event from another interaction, is refused so a mistyped ID cannot
 lose a reply. Set `new_interaction` to true to start a new durable stream; no
-separate conversation-creation tool is required. Set `decision` to true only
-when you need the entity to choose or approve before you can go on (`options`:
-2 to 8 short choices); chat pins it until answered, while progress reports stay
-plain. Reply to your own decision to withdraw it.
+separate conversation-creation tool is required. Set `decision` to true
+whenever the message asks the entity for something you need back: a choice,
+approval, file, or information, even if you keep working meanwhile (`options`:
+2 to 8 short choices). Chat pins it until answered; progress reports stay plain.
+Reply to your own decision to withdraw it.
 
 ### `record_directive`
 

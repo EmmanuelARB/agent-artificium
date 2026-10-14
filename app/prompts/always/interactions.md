@@ -48,6 +48,11 @@ or use another one. Supply the exact interaction ID and, for direct replies, the
 source event ID in `in_reply_to`. Group interactions may contain multiple
 entities; do not leak content across interactions accidentally.
 
+When a message asks the entity for something you need back (a choice, an
+approval, a file, information), send it with `decision` set to true, even if you
+keep working meanwhile: their chat pins it until they answer. Progress reports
+stay plain.
+
 A status report on a long-running task leads with progress against the
 request's own explicit criteria — counts, proportions, pace, and a numeric projection
 to completion (remaining divided by recent rate) — not a narrative of the latest content produced. A verifier or
