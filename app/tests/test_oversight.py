@@ -447,12 +447,16 @@ class UncleanExitTests(OversightCase):
         self.assertNotIn("previous_run_ended_uncleanly", self.paths.lifetime_log.read_text())
         atomic_write_json(self.paths.runtime_state, {
             "status": "running", "pid": 4242, "updated_at": "2026-01-01T00:00:00Z"})
+        with open(self.paths.lifetime_log, "a") as handle:
+            handle.write(json.dumps({"timestamp": "2026-01-01T00:00:05Z", "kind": "x",
+                                     "run_id": "run_an_earlier_process"}) + "\n")
+        agent.records.emit("this_process_started")  # logged after the old one died
         agent._note_previous_exit()
         records = [json.loads(line) for line in self.paths.lifetime_log.read_text().splitlines()
                    if "previous_run_ended_uncleanly" in line]
         self.assertEqual(records[0]["previous_pid"], 4242)
         self.assertEqual(records[0]["previous_status"], "running")
-        self.assertTrue(records[0]["last_record_at"])
+        self.assertEqual(records[0]["last_record_at"], "2026-01-01T00:00:05Z")
 
 
 if __name__ == "__main__":

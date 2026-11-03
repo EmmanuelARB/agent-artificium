@@ -2123,7 +2123,11 @@ class Artificium:
                 tail = handle.read().splitlines()
             for line in reversed(tail):
                 try:
-                    last_record = json.loads(line).get("timestamp")
+                    record = json.loads(line)
+                    # This process has already logged its own start-up records.
+                    if record.get("run_id") == self.records.run_id:
+                        continue
+                    last_record = record.get("timestamp")
                 except (ValueError, AttributeError):
                     continue
                 break
