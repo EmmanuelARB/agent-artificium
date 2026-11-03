@@ -3,7 +3,7 @@
 Your working-memory-offload checkpoints show a long streak: blocker
 `{{blocker}}` named in {{same_blocker_checkpoints}} consecutive checkpoints, and
 {{checkpoints_without_advance}} consecutive checkpoints that did not report an
-advance of the objective, since {{since}} ({{hours}} hours).
+advance of the objective, since {{since}} ({{hours}} hours). {{measure_note}}
 
 Hard problems can legitimately take this long, and this notice does not ask you
 to abandon one. It asks you to stop repeating the same kind of attempt and step

@@ -1,4 +1,4 @@
-version = "Artificium-revolution-1.10.26"
+version = "Artificium-revolution-1.11.0"
 
 always = [
   "always/core.md",
@@ -22,6 +22,10 @@ input_batch = "runtime/input_batch.md"
 tool_result = "runtime/tool_result.md"
 restored_checkpoint = "runtime/restored_checkpoint.md"
 emergency_summary = "runtime/emergency_summary.md"
+default_check_system = "runtime/default_check_system.md"
+default_check_request = "runtime/default_check_request.md"
+evaluation_system = "runtime/evaluation_system.md"
+evaluation_request = "runtime/evaluation_request.md"
 
 [events]
 first_wake = "events/first_wake.md"
@@ -57,3 +61,8 @@ tool_execution_error = "events/tool_execution_error.md"
 shell_timeout = "events/shell_timeout.md"
 visual_context_released = "events/visual_context_released.md"
 initialization_pending = "events/initialization_pending.md"
+default_applied = "events/default_applied.md"
+default_held = "events/default_held.md"
+evaluation_notice = "events/evaluation_notice.md"
+message_cadence = "events/message_cadence.md"
+idle_wake = "events/idle_wake.md"

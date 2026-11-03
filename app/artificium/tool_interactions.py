@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import datetime as dt
 import difflib
 import inspect
 from typing import Any
 
 from .directives import DirectiveStore
 from .filesystem import atomic_write_json, read_json, safe_identifier
+from .oversight import INTERNAL_INTERACTIONS, SYSTEM_SENDER, default_deadline
+
+
+# Plain messages sent without an answer, within this many hours, before the
+# agent is nudged to batch them (again at every multiple).
+CADENCE_MESSAGES = 4
+CADENCE_HOURS = 6
 
 
 class InteractionToolsMixin:
@@ -112,15 +120,30 @@ class InteractionToolsMixin:
         new_interaction: bool = False,
         decision: bool = False,
         options: list[str] | None = None,
+        default: str | None = None,
+        reply_by_hours: float | None = None,
     ) -> dict[str, Any]:
         refusal = self._check_interaction_target(
             interaction_id, in_reply_to, new_interaction
-        ) or self._check_decision(decision, options)
+        ) or self._check_decision(decision, options) or self._check_default(
+            decision, options, default, reply_by_hours)
         if refusal:
             return refusal
         extra: dict[str, Any] = {}
+        hours = self._default_hours(default, reply_by_hours)
+        previous = self.interactions.open_decisions() if decision else []
         if decision:
             extra["kind"] = "decision"
+            if hours:
+                extra.update(default=str(default).strip(),
+                             default_after=default_deadline(
+                                 dt.datetime.now(dt.timezone.utc), hours))
+                if "default" not in inspect.signature(self.interactions.add_event).parameters:
+                    # An overlay of an older store cannot keep the field; the
+                    # entity still reads the default in the text.
+                    extra.pop("default"), extra.pop("default_after")
+                    content += (f"\n\nIf there is no answer in {hours:g} h, I will "
+                                f"take: {str(default).strip()}")
             if options:
                 if "options" in inspect.signature(self.interactions.add_event).parameters:
                     extra["options"] = options
@@ -139,9 +162,11 @@ class InteractionToolsMixin:
             in_reply_to=in_reply_to,
             **extra,
         )
+        withdrawn: list[dict[str, Any]] = []
         if decision:
             self._announce_decision(event)
-        return {
+            withdrawn = self._withdraw(previous, event, sender or self.config.instance_id)
+        result = {
             "status": "sent",
             "summary": ("decision sent; it stays pinned for the user until they "
                         "answer it" if decision else "outbound interaction event written"),
@@ -154,6 +179,101 @@ class InteractionToolsMixin:
                 )
             ],
         }
+        if decision:
+            if hours:
+                result["summary"] += (f"; if nobody answers in {hours:g} h, the harness "
+                                      "checks your default against what they have said "
+                                      "and, if it passes, delivers it to you as your own choice")
+            elif default:
+                result["summary"] += "; defaults are off in this configuration, so none was kept"
+            if withdrawn:
+                result["withdrawn"] = withdrawn
+                result["summary"] += (f"; {len(withdrawn)} earlier unanswered decision(s) "
+                                      "were withdrawn so only one stays open, restate "
+                                      "anything still needed in this one")
+        else:
+            notice = self._cadence_notice(interaction_id)
+            if notice:
+                result["_notifications"].append(notice)
+        return result
+
+    def _default_hours(self, default: str | None, reply_by_hours: float | None) -> float:
+        """Hours until a decision's default is considered; 0 when it has none."""
+
+        configured = float(getattr(self.config, "decision_default_hours", 0) or 0)
+        if not default or configured <= 0:
+            return 0.0
+        return float(reply_by_hours) if reply_by_hours else configured
+
+    @staticmethod
+    def _check_default(decision: bool, options: list[str] | None,
+                       default: str | None, reply_by_hours: float | None) -> dict[str, Any] | None:
+        """Refuse malformed default arguments before anything is sent."""
+
+        if default is None and reply_by_hours is None:
+            return None
+        problem = None
+        if not decision:
+            problem = "a default only applies to a decision; set decision to true"
+        elif default is None:
+            problem = "reply_by_hours needs a default; state what you will do if no answer comes"
+        elif not isinstance(default, str) or not 0 < len(default.strip()) <= 500:
+            problem = "default must be 1 to 500 characters"
+        elif options and default.strip().lower() not in [item.strip().lower() for item in options]:
+            problem = "default must be one of the options, written exactly"
+        elif reply_by_hours is not None and (
+                isinstance(reply_by_hours, bool) or not isinstance(reply_by_hours, (int, float))
+                or not 0.01 <= reply_by_hours <= 720):
+            problem = "reply_by_hours must be a number between 0.01 and 720"
+        if problem:
+            return {"status": "error", "summary": f"{problem}; nothing was sent."}
+        return None
+
+    def _withdraw(self, previous: list[dict[str, Any]], current: dict[str, Any],
+                  sender: str) -> list[dict[str, Any]]:
+        """One question at a time: an older unanswered decision is withdrawn in
+        the entity's view, since several pinned questions are read as noise
+        and the newest is the one the agent now needs."""
+
+        withdrawn: list[dict[str, Any]] = []
+        for old in previous:
+            if old.get("id") == current.get("id"):
+                continue
+            self.interactions.add_event(
+                str(old["interaction_id"]), sender=sender, direction="outbound",
+                content=f"Withdrawn: replaced by a newer question ({current['id']}).",
+                in_reply_to=old["id"], recipient=old.get("recipient"))
+            withdrawn.append({"id": old["id"],
+                              "question": " ".join(str(old.get("content") or "").split())[:200]})
+        return withdrawn
+
+    def _cadence_notice(self, interaction_id: str) -> str | None:
+        """A nudge when plain messages pile up without the entity writing back."""
+
+        if interaction_id in INTERNAL_INTERACTIONS:
+            return None
+        events = self.interactions.events(interaction_id)
+        answered = [e for e in events if e.get("direction") == "inbound"
+                    and e.get("sender") not in (SYSTEM_SENDER, "scheduler")]
+        since = str(answered[-1].get("created_at")) if answered else ""
+        window = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=CADENCE_HOURS)
+
+        def recent_enough(event: dict[str, Any]) -> bool:
+            try:
+                made = dt.datetime.fromisoformat(str(event.get("created_at")).replace("Z", "+00:00"))
+            except ValueError:
+                return False
+            return made.replace(tzinfo=made.tzinfo or dt.timezone.utc) >= window
+
+        recent = [e for e in events if e.get("direction") == "outbound"
+                  and e.get("kind") != "decision" and str(e.get("created_at")) > since
+                  and recent_enough(e)]
+        count = len(recent)
+        if count < CADENCE_MESSAGES or count % CADENCE_MESSAGES:
+            return None
+        entity = answered[-1].get("sender") if answered else "the entity"
+        return self.prompts.event("message_cadence", count=count, entity=entity,
+                                  interaction_id=interaction_id, hours=CADENCE_HOURS)
 
     def _announce_decision(self, event: dict[str, Any]) -> None:
         """Show a decision in the life-loop trace, which ``watch`` follows."""

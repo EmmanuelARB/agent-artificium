@@ -79,6 +79,7 @@ class MemoryToolsMixin:
         reason: str = "context_management",
         blocker: str = "",
         objective_progress: str = "",
+        measure: str = "",
     ) -> dict[str, Any]:
         state = self._control()
         BlockerTracker.validate(objective_progress)
@@ -156,7 +157,7 @@ class MemoryToolsMixin:
             }
         )
         progress = BlockerTracker(self.paths, self.records).record(
-            blocker, objective_progress
+            blocker, objective_progress, measure, str(remembered.get("path") or "")
         )
         offloaded["blocker_status"] = progress
         offloaded["_notifications"] = [
@@ -189,9 +190,23 @@ class MemoryToolsMixin:
                     checkpoints_without_advance=progress["checkpoints_without_advance"],
                     since=progress["since"],
                     hours=progress["hours"],
+                    measure_note=self._measure_note(progress["measure"]),
                 )
             )
         return offloaded
+
+    @staticmethod
+    def _measure_note(trend: dict[str, Any]) -> str:
+        values = trend.get("values") or []
+        if not values:
+            return ("You declared no `measure` in these checkpoints, so nothing "
+                    "outside your own labels shows whether the objective moved.")
+        listed = " | ".join(str(item["measure"]) for item in values)
+        note = f"Your declared measure at the last checkpoints (oldest first): {listed}."
+        if trend.get("unchanged", 0) >= 3:
+            note += (f" It has not changed over the last {trend['unchanged']} "
+                     "checkpoints.")
+        return note
 
     def _time_use_notice(self) -> list[str]:
         """Measured time use since the last offload, for the reflection."""

@@ -262,6 +262,17 @@ class Config:
     # invalidate the provider's cache for the whole working context.
     pinned_mind_snapshot: bool = True
     custom_contract: dict[str, Any] = field(default_factory=dict)
+    # Oversight, in hours; 0 turns each part off. A saved file that predates
+    # them gets these defaults, which is the point: they guard long runs.
+    # How long a decision's proposed default waits for the entity.
+    decision_default_hours: float = 24.0
+    # How often a fresh-context reviewer judges whether the work advances.
+    evaluation_interval_hours: float = 24.0
+    # A sleep with no scheduled task and no pending default wakes after this.
+    idle_wake_hours: float = 6.0
+    # A different model name on the same endpoint for those fresh-context
+    # checks, so they do not share the agent's blind spots; None uses the same.
+    oversight_model: str | None = None
 
     def __post_init__(self) -> None:
         if self.context_window_source not in {"manual", "detected", "default"}:
@@ -348,6 +359,15 @@ class Config:
             raise ValueError("chunk fractions must be granular <= balanced <= broad")
         if self.poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
+        for name in ("decision_default_hours", "evaluation_interval_hours",
+                     "idle_wake_hours"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                    or not 0 <= value <= 24 * 90:
+                raise ValueError(f"{name} must be 0 (off) or a number of hours up to 2160")
+        if self.oversight_model is not None and not (
+                isinstance(self.oversight_model, str) and self.oversight_model.strip()):
+            raise ValueError("oversight_model must be a model name or null")
         if self.engine_wait_notice_seconds <= 0:
             raise ValueError("engine_wait_notice_seconds must be positive")
         if self.engine_wait_repeat_seconds <= 0:

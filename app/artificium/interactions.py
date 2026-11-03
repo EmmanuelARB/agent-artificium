@@ -226,6 +226,8 @@ class InteractionStore:
         in_reply_to: str | None = None,
         recipient: str | None = None,
         options: Sequence[str] = (),
+        default: str | None = None,
+        default_after: str | None = None,
     ) -> tuple[dict[str, Any], Path]:
         interaction_id = safe_identifier(interaction_id, label="interaction id")
         sender = safe_identifier(sender, label="entity id")
@@ -255,6 +257,11 @@ class InteractionStore:
             if options:
                 # Absent otherwise, so events keep their historical shape.
                 event["options"] = [str(item) for item in options]
+            if default:
+                # What the sender will take as the answer if none comes by
+                # `default_after`; absent on every other event.
+                event["default"] = str(default)
+                event["default_after"] = default_after
             path = self._event_path(interaction_id, event_id)
             atomic_write_json(path, event)
             if direction == "inbound":

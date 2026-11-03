@@ -191,13 +191,14 @@ any reusable memories, then repeat the call with a descriptive `path`, a
 self-sufficient `checkpoint`, `retrieve_when`, optional `source_refs`, and
 `reflection_complete:true`, plus `blocker` (a short, stable name for the main
 obstacle, or empty) and `objective_progress` (`advanced`, `supporting`, or
-`none`). The harness saves the checkpoint and emits
+`none`), and `measure`: one observable value or fact that would change if the
+objective advanced, with its current value; keep the same one across checkpoints. The harness saves the checkpoint and emits
 organization Guidance,
 archives the detailed prior context, replaces working memory with the
 checkpoint, and reports before/after token, word, and character estimates.
 
 ```json
-{"tool":"offload_working_memory","path":"context/DESCRIPTIVE-CONTINUATION-NAME","checkpoint":"SELF-SUFFICIENT CONTINUATION","retrieve_when":"WHEN THIS CONTEXT SHOULD BE RESTORED","source_refs":[],"blocker":"SHORT STABLE NAME OR EMPTY","objective_progress":"advanced","reflection_complete":true}
+{"tool":"offload_working_memory","path":"context/DESCRIPTIVE-CONTINUATION-NAME","checkpoint":"SELF-SUFFICIENT CONTINUATION","retrieve_when":"WHEN THIS CONTEXT SHOULD BE RESTORED","source_refs":[],"blocker":"SHORT STABLE NAME OR EMPTY","objective_progress":"advanced","measure":"WHAT YOU WATCH = CURRENT VALUE","reflection_complete":true}
 ```
 
 Do not wait for context exhaustion. When a completed task or resolved
@@ -259,7 +260,7 @@ obligation visible in runtime state.
 ### `send_interaction`
 
 ```json
-{"tool":"send_interaction","interaction_id":"INTERACTION_ID","content":"MESSAGE","in_reply_to":"EVENT_ID OR NULL","attachments":[],"recipient":null,"new_interaction":false,"decision":false,"options":null}
+{"tool":"send_interaction","interaction_id":"INTERACTION_ID","content":"MESSAGE","in_reply_to":"EVENT_ID OR NULL","attachments":[],"recipient":null,"new_interaction":false,"decision":false,"options":null,"default":null,"reply_by_hours":null}
 ```
 
 Writes one outbound event to the exact interaction. Plain life-loop text is
@@ -270,7 +271,12 @@ separate conversation-creation tool is required. Set `decision` to true
 whenever the message asks the entity for something you need back: a choice,
 approval, file, or information, even if you keep working meanwhile (`options`:
 2 to 8 short choices). Chat pins it until answered; progress reports stay plain.
-Reply to your own decision to withdraw it.
+Only one decision stays open: a new one withdraws the older. Give a `default`
+(one of the `options`, written exactly): what you will do if nobody answers
+within `reply_by_hours` (the configured wait if null). The harness has it
+checked against what the entity has said before it is applied, and never for
+anything irreversible or outside your workspace. Reply to your own decision to
+withdraw it.
 
 ### `record_directive`
 

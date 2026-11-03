@@ -198,6 +198,27 @@ class ContinuousLoopCase(unittest.TestCase):
         self.assertEqual(request_times, [0, 0, 5])
         self.assertIn("timer", json.dumps(engine.requests[-1]))
 
+    def test_a_sleep_nothing_is_due_to_end_wakes_after_the_idle_fallback(self):
+        def respond(number, messages):
+            if number <= 2:
+                return call("sleep", mode="until_event", reflection_complete=number == 2)
+            return call("read_file", path="mind/self.txt")
+
+        # 0.001 h is 3.6 s: the sleep has no task, timer, or pending default.
+        agent, engine = self.agent(respond, idle_wake_hours=0.001)
+        self.stop_after_tools(agent, 3)
+
+        def advance(seconds):
+            self.clock += 2
+            self.assertLessEqual(self.clock, 20, "Idle fallback did not wake")
+
+        with mock.patch("artificium.runtime.time.time", side_effect=lambda: 1000 + self.clock), \
+             mock.patch("artificium.runtime.time.sleep", side_effect=advance):
+            agent.run_forever(quiet=True)
+        self.assertEqual(len(engine.requests), 3)
+        self.assertEqual(read_json(self.paths.sleep_state)["reason"], "idle_fallback")
+        self.assertIn("IDLE WAKE", json.dumps(engine.requests[-1]))
+
     def test_sleep_still_completes_reflection_and_waits_for_an_event(self):
         def respond(number, messages):
             self.assertLessEqual(number, 2)

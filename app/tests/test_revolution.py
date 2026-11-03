@@ -1485,18 +1485,21 @@ class RevolutionCase(unittest.TestCase):
         first = tools.send_interaction(
             "room-d", "Which toolchain?", decision=True, options=["clang", "gcc"]
         )
-        second = tools.send_interaction("room-d", "May I delete the cache?", decision=True)
         self.assertEqual(first["status"], "sent")
         self.assertEqual(first["event"]["kind"], "decision")
         self.assertEqual(first["event"]["options"], ["clang", "gcc"])
+        self.assertEqual([item["id"] for item in client.open_decisions("room-d")],
+                         [first["event"]["id"]])
+        # Only one question stays open: a newer one withdraws the older.
+        second = tools.send_interaction("room-d", "May I delete the cache?", decision=True)
         self.assertNotIn("options", second["event"])
-        open_now = client.open_decisions("room-d")
-        self.assertEqual([item["id"] for item in open_now],
-                         [first["event"]["id"], second["event"]["id"]])
-        client.send("room-d", sender="entity_1", content="clang",
-                    in_reply_to=first["event"]["id"])
-        tools.send_interaction("room-d", "Never mind, found a way.",
-                               in_reply_to=second["event"]["id"])
+        self.assertEqual([item["id"] for item in second["withdrawn"]], [first["event"]["id"]])
+        self.assertEqual([item["id"] for item in client.open_decisions("room-d")],
+                         [second["event"]["id"]])
+        notes = [e for e in client.events("room-d") if e.get("in_reply_to") == first["event"]["id"]]
+        self.assertIn("Withdrawn", notes[0]["content"])
+        client.send("room-d", sender="entity_1", content="no",
+                    in_reply_to=second["event"]["id"])
         self.assertEqual(client.open_decisions("room-d"), [])
         self.assertEqual(client.open_decisions(), [])
         traced = [json.loads(line) for line in

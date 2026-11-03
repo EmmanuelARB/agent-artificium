@@ -660,6 +660,20 @@ def render_decision_requested(record, options, session=None):
     return lines
 
 
+def render_evaluation_completed(record, options, session=None):
+    limit = max(20, options.width - 40)
+    text = " ".join(str(record.get("preview") or "").split())
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "…"
+    return [f"[evaluation] {record.get('verdict') or 'unknown'} "
+            f"({record.get('trigger') or 'interval'}): {text}"]
+
+
+def render_previous_run_ended_uncleanly(record, options, session=None):
+    return [f"[recovery] the previous process (pid {record.get('previous_pid')}) did "
+            f"not stop cleanly; last activity {record.get('last_record_at') or 'unknown'}"]
+
+
 def render_sleep_ended(record, options, session=None):
     reason = str(record.get("reason") or "unknown")
     asleep = ""
@@ -691,6 +705,8 @@ _RENDERERS: dict[str, Callable[[dict, RenderOptions, "WatchSession | None"], lis
     events.KIND_SLEEP_STARTED: render_sleep_started,
     events.KIND_SLEEP_ENDED: render_sleep_ended,
     events.KIND_DECISION_REQUESTED: render_decision_requested,
+    events.KIND_EVALUATION_COMPLETED: render_evaluation_completed,
+    events.KIND_PREVIOUS_RUN_ENDED_UNCLEANLY: render_previous_run_ended_uncleanly,
     events.KIND_CONTEXT_USAGE: render_context_usage,
     events.KIND_CONTEXT_COMPACTED: render_memory_event,
     events.KIND_ENGINE_REQUEST: render_engine_request,

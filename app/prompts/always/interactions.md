@@ -51,7 +51,8 @@ entities; do not leak content across interactions accidentally.
 When a message asks the entity for something you need back (a choice, an
 approval, a file, information), send it with `decision` set to true, even if you
 keep working meanwhile: their chat pins it until they answer. Progress reports
-stay plain.
+stay plain, and a few at a time. Say in the decision which default you will take
+if no answer comes.
 
 A status report on a long-running task leads with progress against the
 request's own explicit criteria — counts, proportions, pace, and a numeric projection

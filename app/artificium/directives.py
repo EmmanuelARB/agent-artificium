@@ -12,6 +12,11 @@ _WHITESPACE = re.compile(r"\s+")
 # A word that looks like a file name or path: something.ext, dir/file.ext.
 _FILE_TOKEN = re.compile(r"[\w./~-]*\w\.[A-Za-z0-9]{1,8}\b")
 MAX_ACTIVE_DIRECTIVES = 40
+# Senders that are the harness or the agent's own earlier words coming back:
+# the scheduler replays text the agent wrote, and the harness reports defaults
+# it applied for an entity that did not answer. Neither is an entity giving
+# an instruction, so neither can be quoted as one.
+SYSTEM_SENDERS = frozenset({"scheduler", "harness"})
 MAX_QUOTE_CHARACTERS = 2_000
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
 
@@ -117,6 +122,12 @@ class DirectiveStore:
 
     def record(self, event_id: str, quote: str, source: Path | None = None) -> dict[str, Any]:
         event = self._inbound_event(event_id)
+        if event.get("sender") in SYSTEM_SENDERS:
+            raise ValueError(
+                f"Event `{event['id']}` comes from `{event.get('sender')}`, which is the "
+                "harness or your own scheduled text, not an entity giving an "
+                "instruction; a directive must quote an entity's own words."
+            )
         wanted = _normalize(quote)
         if len(wanted) < 3:
             raise ValueError("quote is empty; copy the instruction's exact words")

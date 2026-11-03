@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import hashlib
+import json
 import os
 import shutil
 import signal
@@ -14,6 +16,7 @@ from . import _bootstrap
 from .artifacts import ArtifactTracker
 from .config import ConfigStore, SecretsStore
 from .directives import DirectiveStore
+from .oversight import Oversight
 from .engine import Engine, EngineError, EngineReply, PreparedRequest, make_engine
 from . import context_budget as _context_budget
 from .context_budget import (TokenCount, available_output, check_input,
@@ -147,6 +150,10 @@ class Artificium:
             scheduler=self.scheduler,
         )
         self.tools.reviewer = self._review
+        self.oversight = Oversight(
+            paths, self.config, self.records, self.interactions, self.prompts,
+            self._oversight_complete,
+        )
         if not self.config.mandatory_offload:
             control = self._tools_control()
             if control.pop("mandatory_offload_pending", None):
@@ -885,6 +892,27 @@ class Artificium:
         request_id, reply = self._complete(messages, wake_reason="review")
         return request_id, reply.content
 
+    def _oversight_complete(self, messages: list[dict[str, Any]]) -> tuple[str, str]:
+        """A fresh-context request for the harness's own checks.
+
+        With ``oversight_model`` set it goes to that model on the same
+        endpoint. Oversight runs on the life-loop thread between turns, so
+        the engine can be swapped for the one request.
+        """
+
+        model = self.config.oversight_model
+        if not model or model == self.config.model:
+            request_id, reply = self._complete(messages, wake_reason="oversight")
+            return request_id, reply.content
+        engine, config = self.engine, self.config
+        self.config = dataclasses.replace(config, model=model)
+        self.engine = make_engine(self.config, self.api_key)
+        try:
+            request_id, reply = self._complete(messages, wake_reason="oversight")
+        finally:
+            self.engine, self.config = engine, config
+        return request_id, reply.content
+
     def _append_runtime(self, records: list[str], *, origin: str) -> None:
         if not records:
             return
@@ -959,7 +987,7 @@ class Artificium:
                 },
             )
         if item.type == "wake":
-            return self.prompts.event(
+            text = self.prompts.event(
                 "wake",
                 wake_reason=metadata.get("reason", item.summary),
                 sleep_started_at=metadata.get("sleep_started_at", "unknown"),
@@ -967,6 +995,12 @@ class Artificium:
                 pending_event_count=len(self.interactions.pending_events(1_000)),
                 timed_sleep_interrupted=metadata.get("timed_sleep_interrupted", False),
             )
+            if metadata.get("reason") == "idle_fallback":
+                text += "\n\n" + self.prompts.event(
+                    "idle_wake", hours=f"{self.config.idle_wake_hours:g}",
+                    waiting=len(self.oversight.open_decisions()),
+                )
+            return text
         if item.type == "recovery":
             reason = metadata.get("reason", item.summary)
             if metadata.get("failed_attempts"):
@@ -1282,6 +1316,8 @@ class Artificium:
             if request.mode == "timed"
             else None
         )
+        upcoming = self._upcoming_tasks()
+        fallback = self._idle_fallback_at(request.mode, upcoming)
         atomic_write_json(
             self.paths.sleep_state,
             {
@@ -1290,14 +1326,33 @@ class Artificium:
                 "seconds": request.seconds,
                 "started_at": utc_now(),
                 "wake_at_epoch": wake_at,
+                "idle_fallback_at_epoch": fallback,
             },
         )
-        upcoming = self._upcoming_tasks()
         self.records.emit("sleep_started", mode=request.mode, seconds=request.seconds,
                           upcoming_tasks=upcoming)
         self.records.life("sleep_started", mode=request.mode, seconds=request.seconds,
                           upcoming_tasks=upcoming)
         self.tools.sleep_request = None
+
+    def _idle_fallback_at(self, mode: str, upcoming: list[dict[str, Any]]) -> float | None:
+        """When an until-event sleep that nothing is due to end should end anyway.
+
+        A sleep with a scheduled task, a pending decision default, or a timer
+        already has a wake; without any, the agent can sleep itself idle
+        until someone happens to write, which hours of waiting on a question
+        have shown it does.
+        """
+
+        hours = float(self.config.idle_wake_hours or 0)
+        if hours <= 0 or mode != "until_event" or upcoming:
+            return None
+        try:
+            if self.oversight.pending_deadlines():
+                return None
+        except Exception:
+            pass
+        return time.time() + hours * 3600
 
     def _upcoming_tasks(self, limit: int = 3) -> list[dict[str, Any]]:
         """The scheduled tasks most likely to end a sleep, for watch.
@@ -1335,6 +1390,9 @@ class Artificium:
             interrupted = state.get("mode") == "timed"
         elif state.get("mode") == "timed" and time.time() >= float(state.get("wake_at_epoch", 0)):
             reason = "timer"
+        elif state.get("idle_fallback_at_epoch") and time.time() >= float(
+                state["idle_fallback_at_epoch"]):
+            reason = "idle_fallback"
         if reason is None:
             return True
         woke = utc_now()
@@ -2045,6 +2103,45 @@ class Artificium:
         self._write_state("idle", last_turn_id=turn_id)
         return last_visible
 
+    def _note_previous_exit(self) -> None:
+        """Record when the previous process ended without a clean stop.
+
+        The state file says "stopped" only after a graceful shutdown, and the
+        process lock is held here, so any other status means the earlier
+        process died: killed, crashed, or the machine went down. Without the
+        record an unexplained gap in the logs stays unexplained.
+        """
+
+        prior = read_json(self.paths.runtime_state, {})
+        if not isinstance(prior, dict) or prior.get("status") in (None, "stopped"):
+            return
+        last_record = None
+        try:
+            with open(self.paths.lifetime_log, "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, handle.tell() - 8192))
+                tail = handle.read().splitlines()
+            for line in reversed(tail):
+                try:
+                    last_record = json.loads(line).get("timestamp")
+                except (ValueError, AttributeError):
+                    continue
+                break
+        except OSError:
+            pass
+        detail = {
+            "previous_status": prior.get("status"), "previous_pid": prior.get("pid"),
+            "state_updated_at": prior.get("updated_at"), "last_record_at": last_record,
+            "prompt_pack": prior.get("prompt_pack"),
+        }
+        self.records.emit("previous_run_ended_uncleanly", **detail)
+        self.records.life("previous_run_ended_uncleanly", **detail)
+        self.console.line(
+            "recovery",
+            f"the previous process (pid {prior.get('pid')}) did not stop cleanly; "
+            f"its last activity was {last_record or prior.get('updated_at')}",
+        )
+
     def _write_state(self, status: str, **data: Any) -> None:
         atomic_write_json(
             self.paths.runtime_state,
@@ -2241,6 +2338,7 @@ class Artificium:
 
         try:
             with ProcessLock(self.paths.process_lock):
+                self._note_previous_exit()
                 self._write_state("running")
                 scheduler_thread = threading.Thread(
                     target=scheduler_worker,
@@ -2254,6 +2352,9 @@ class Artificium:
                     if self._request_blocked:
                         time.sleep(self.config.poll_seconds)
                         continue
+                    # Between turns and during sleep: a due check can end a sleep.
+                    for note in self.oversight.tick():
+                        self.console.line("oversight", note)
                     if self._sleep_active():
                         time.sleep(self.config.poll_seconds)
                         continue

@@ -71,6 +71,9 @@ def _print_event(
     print(f"{_DIM}{content}{_RESET}" if color and update else content)
     for number, option in enumerate(decision_options(event), 1):
         print(f"  {number}) {option}")
+    if decision and event.get("default"):
+        print(f"  default if no answer by {_local_time(event.get('default_after'))}: "
+              f"{event['default']}")
     attachments = event.get("attachments") or []
     if attachments:
         print("Attachments: " + ", ".join(str(item) for item in attachments))
@@ -98,6 +101,10 @@ def _decision_panel(
                          f"(see /history){reset}")
         for index, option in enumerate(decision_options(decision), 1):
             lines.append(f"    {index}) {option}")
+        if decision.get("default"):
+            lines.append(f"    {dim}default if no answer by "
+                         f"{_local_time(decision.get('default_after'))}: "
+                         f"{decision['default']}{reset}")
     hint = "answer with /reply N TEXT" + (
         "" if count > 1 else ", or just type your answer")
     lines.append(f"{dim}{hint}{reset}")

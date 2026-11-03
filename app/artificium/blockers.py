@@ -16,6 +16,8 @@ STALL_CHECKPOINTS = 6
 STALL_HOURS = 12.0
 STALL_HOURS_MIN_CHECKPOINTS = 3
 HISTORY_LIMIT = 200
+MEASURE_CHARACTERS = 300
+TREND_LENGTH = 6
 
 
 def _normalize(blocker: str) -> str:
@@ -56,7 +58,29 @@ class BlockerTracker:
                 "(or omitted)"
             )
 
-    def record(self, blocker: str, objective_progress: str) -> dict[str, Any]:
+    def trend(self, history: list[dict[str, Any]]) -> dict[str, Any]:
+        """The declared measure over recent checkpoints, oldest first.
+
+        A progress label is the agent's opinion; a value it chose to watch is
+        a series that shows when nothing moved. ``unchanged`` counts the
+        trailing checkpoints that repeat the latest value.
+        """
+
+        measured = [(item.get("at"), str(item.get("measure")).strip())
+                    for item in history if str(item.get("measure") or "").strip()]
+        recent = measured[-TREND_LENGTH:]
+        unchanged = 0
+        for _, value in reversed(measured):
+            if value.lower() != recent[-1][1].lower():
+                break
+            unchanged += 1
+        return {
+            "values": [{"at": at, "measure": value} for at, value in recent],
+            "unchanged": unchanged,
+        }
+
+    def record(self, blocker: str, objective_progress: str,
+               measure: str = "", checkpoint_path: str = "") -> dict[str, Any]:
         state = read_json(self.path, {})
         state = state if isinstance(state, dict) else {}
         history = [item for item in state.get("history") or [] if isinstance(item, dict)]
@@ -65,6 +89,11 @@ class BlockerTracker:
             "blocker": blocker.strip(),
             "objective_progress": objective_progress or None,
         }
+        measure = " ".join(str(measure or "").split())[:MEASURE_CHARACTERS]
+        if measure:
+            entry["measure"] = measure
+        if checkpoint_path:
+            entry["checkpoint_path"] = checkpoint_path
         history = (history + [entry])[-HISTORY_LIMIT:]
 
         key = _normalize(blocker)
@@ -98,6 +127,8 @@ class BlockerTracker:
             "history": history,
             "notified_since": first,
             "notified_streak": notified,
+            # Read by the periodic evaluation, which a notice brings forward.
+            "stalled_at": entry["at"] if stalled else state.get("stalled_at"),
         })
         result = {
             "blocker": entry["blocker"] or None,
@@ -106,6 +137,7 @@ class BlockerTracker:
             "since": first,
             "hours": round(hours, 1),
             "stalled": stalled,
+            "measure": self.trend(history),
         }
         if stalled:
             self.records.emit("stalled_blocker_noticed", **result)
