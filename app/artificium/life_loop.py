@@ -28,6 +28,14 @@ FUNCTION_PATTERN = re.compile(
 PARAMETER_PATTERN = re.compile(
     r"<parameter=(?P<key>[^>\s]+)\s*>\n?(?P<value>.*?)\n?</parameter\s*>", re.IGNORECASE | re.DOTALL
 )
+# DeepSeek's native request markup: <｜DSML｜function_calls><｜DSML｜invoke name="X">
+# <｜DSML｜parameter name="K" string="true">V</｜DSML｜parameter>...; the bars may be
+# full-width or ASCII and models sometimes space the tags out ("< | DSML | tool_call >").
+DSML_TAG_PATTERN = re.compile(
+    r"<\s*(?P<close>/)?\s*[｜|]\s*DSML\s*[｜|]\s*(?P<tag>[A-Za-z_]+)(?P<attrs>[^<>]*)>"
+)
+DSML_WRAPPERS = frozenset({"function_calls", "tool_calls", "tool_call"})
+STRING_FLAG_PATTERN = re.compile(r"\bstring\s*=\s*[\"']?(?P<flag>true|false)", re.IGNORECASE)
 # A mangled start of the flat object, such as `<tool":"run_shell"` or `<tool="run_shell"`.
 TOOL_KEY_PREFIX_PATTERN = re.compile(r"<\s*[\"']?tool[\"']?\s*[:=]\s*(?=\")", re.IGNORECASE)
 # The flat object found a few characters after stray text such as `tool:` or `<function=tool>`.
@@ -342,6 +350,115 @@ def _unclosed_thought_start(content: str, spans: list[tuple[int, int]], start: i
     return None
 
 
+def _read_dsml(
+    content: str, skip_spans: list[tuple[int, int]], truncated: bool, finish_reason: str | None
+) -> list[tuple[int, int, list[ToolIntent]]]:
+    """Find DSML request blocks: ``(start, end, intents)`` for each.
+
+    A parameter or invoke that is not cleanly closed, or an invoke without a
+    name, becomes an invalid request with a repair notice; nothing is guessed.
+    A wrapper holding no invoke requests nothing, and one holding flat JSON
+    objects is read like a ``<tool_call>`` body.
+    """
+
+    tags = list(DSML_TAG_PATTERN.finditer(content))
+    blocks: list[tuple[int, int, list[ToolIntent]]] = []
+    index = 0
+    while index < len(tags):
+        opening = tags[index]
+        index += 1
+        if opening.group("close") or opening.group("tag").lower() not in DSML_WRAPPERS:
+            continue
+        start = opening.start()
+        if any(s <= start < e for s, e in skip_spans):
+            continue
+        closing_index = next(
+            (i for i in range(index, len(tags))
+             if tags[i].group("close") and tags[i].group("tag").lower() in DSML_WRAPPERS),
+            None,
+        )
+        closed = closing_index is not None
+        end = tags[closing_index].end() if closed else len(content)
+        inner = [t for t in tags[index : closing_index if closed else len(tags)]]
+        index = (closing_index + 1) if closed else len(tags)
+        body_start = opening.end()
+        body_end = tags[closing_index].start() if closed else len(content)
+        intents: list[ToolIntent] = []
+
+        def invalid(raw: str, message: str) -> ToolIntent:
+            return ToolIntent(id=sortable_id("tool_"), name=_guess_name(raw), raw_arguments=raw,
+                              parse_error=message)
+
+        invokes = [t for t in inner if not t.group("close") and t.group("tag").lower() == "invoke"]
+        if not invokes:
+            position = _skip_whitespace(content, body_start)
+            if position < body_end and content.startswith("{", position):
+                try:
+                    objects, _ = _read_json_objects(content, position)
+                except _DecodeFailure as failure:
+                    raw = content[position:body_end].strip()
+                    intents.append(invalid(raw, f"invalid tool-call JSON: {failure.message} at "
+                                                f"character {failure.offset} of the request"))
+                else:
+                    for decoded, o_start, o_end in objects:
+                        try:
+                            name, arguments = _intent_from_value("tool_call", "", decoded)
+                            error = None if name else "tool call is missing a non-empty name"
+                        except TypeError as exc:
+                            name, arguments, error = "", {}, f"invalid tool-call JSON: {exc}"
+                        intents.append(ToolIntent(id=sortable_id("tool_"), name=name,
+                                                  arguments=arguments if error is None else {},
+                                                  raw_arguments=content[o_start:o_end], parse_error=error))
+            blocks.append((start, end, intents))
+            continue
+
+        for number, invoke in enumerate(invokes):
+            following = invokes[number + 1] if number + 1 < len(invokes) else None
+            limit = following.start() if following else body_end
+            close = next((t for t in inner if t.group("close") and t.group("tag").lower() == "invoke"
+                          and invoke.end() <= t.start() <= limit), None)
+            region_end = close.start() if close else limit
+            raw = content[invoke.end():region_end].strip()
+            name_match = NAME_PATTERN.search(invoke.group("attrs"))
+            name = next((g for g in (name_match.groups() if name_match else ()) if g), "").strip()
+            if not name:
+                intents.append(invalid(raw, "DSML invoke has no `name`; use "
+                                            '`<tool_call>{"tool": "NAME", ...}</tool_call>` instead'))
+                continue
+            arguments: dict[str, Any] = {}
+            problem = ""
+            params = [t for t in inner if t.group("tag").lower() == "parameter"
+                      and invoke.end() <= t.start() < region_end]
+            opens = [t for t in params if not t.group("close")]
+            closes = [t for t in params if t.group("close")]
+            if len(opens) != len(closes):
+                problem = "a DSML parameter is not closed"
+            else:
+                for param_open, param_close in zip(opens, closes):
+                    key_match = NAME_PATTERN.search(param_open.group("attrs"))
+                    key = next((g for g in (key_match.groups() if key_match else ()) if g), "").strip()
+                    if not key or param_close.start() < param_open.end() or key in arguments:
+                        problem = "a DSML parameter has no name, is repeated, or is out of order"
+                        break
+                    value = content[param_open.end():param_close.start()]
+                    value = value[1:] if value.startswith("\n") else value
+                    value = value[:-1] if value.endswith("\n") else value
+                    flag = STRING_FLAG_PATTERN.search(param_open.group("attrs"))
+                    keep_string = flag is not None and flag.group("flag").lower() == "true"
+                    arguments[key] = value if keep_string else _literal(value)
+            if not problem and close is None and not closed and truncated and following is None:
+                problem = f"the reply was cut off (finish_reason {finish_reason!r}) before this request closed"
+            if problem:
+                intents.append(ToolIntent(id=sortable_id("tool_"), name=name, raw_arguments=raw,
+                                          parse_error=f"invalid DSML tool call: {problem}; "
+                                                      "re-send it as a `<tool_call>` JSON request."))
+            else:
+                intents.append(ToolIntent(id=sortable_id("tool_"), name=name, arguments=arguments,
+                                          raw_arguments=raw))
+        blocks.append((start, end, intents))
+    return blocks
+
+
 def _guess_name(raw: str) -> str:
     match = re.search(r'["\'](?:tool|name)["\']\s*:\s*["\']([^"\']+)', raw)
     if match is None:
@@ -547,6 +664,14 @@ def parse_life_loop_output(content: str, *, finish_reason: str | None = None) ->
         valid_request_starts.append(start)
         cursor = end
 
+    for start, end, intents in _read_dsml(content, think_spans, truncated, finish_reason):
+        if open_thought is not None and start >= open_thought and any(i.parse_error for i in intents):
+            continue
+        spans.append((start, end))
+        tools.extend(intents)
+        if intents and not any(i.parse_error for i in intents):
+            valid_request_starts.append(start)
+
     if open_thought is not None:
         # A well-formed request after an unclosed `<think>` still runs, since
         # the model may simply have forgotten `</think>`; the thought ends there.
@@ -570,7 +695,7 @@ def parse_life_loop_output(content: str, *, finish_reason: str | None = None) ->
         cursor = end
     visible_parts.append(content[cursor:])
     # A stray closing tag left by a request that ended at its JSON is not text.
-    visible_parts = [TOOL_CLOSE_PATTERN.sub("", part) for part in visible_parts]
+    visible_parts = [DSML_TAG_PATTERN.sub("", TOOL_CLOSE_PATTERN.sub("", part)) for part in visible_parts]
     visible = "\n".join(part.strip() for part in visible_parts if part.strip()).strip()
     return LifeLoopOutput(content, thoughts, tools, visible)
 

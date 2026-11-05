@@ -300,3 +300,82 @@ class ThoughtsAndProse(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DsmlRequestForms(unittest.TestCase):
+    CANONICAL = (
+        "Listing.\n<｜DSML｜function_calls>\n"
+        '<｜DSML｜invoke name="run_shell">\n'
+        '<｜DSML｜parameter name="command" string="true">ls -la\n</｜DSML｜parameter>\n'
+        '<｜DSML｜parameter name="timeout_seconds" string="false">30</｜DSML｜parameter>\n'
+        "</｜DSML｜invoke>\n"
+        '<｜DSML｜invoke name="read_file">\n'
+        '<｜DSML｜parameter name="path" string="true">a.txt</｜DSML｜parameter>\n'
+        "</｜DSML｜invoke>\n</｜DSML｜function_calls>"
+    )
+
+    def test_canonical_block_gives_ordered_calls_and_clean_text(self) -> None:
+        parsed = parse_life_loop_output(self.CANONICAL)
+        self.assertEqual(
+            [(t.name, t.arguments, t.parse_error) for t in parsed.tools],
+            [("run_shell", {"command": "ls -la", "timeout_seconds": 30}, None),
+             ("read_file", {"path": "a.txt"}, None)],
+        )
+        self.assertEqual(parsed.visible, "Listing.")
+
+    def test_ascii_and_spaced_bars_are_read(self) -> None:
+        content = (
+            '< | DSML | tool_calls>< | DSML | invoke name="run_shell">'
+            '< | DSML | parameter name="command" string="true">pwd</ | DSML | parameter>'
+            "</ | DSML | invoke></ | DSML | tool_calls>"
+        )
+        self.assertEqual(calls(content), [("run_shell", {"command": "pwd"}, None)])
+
+    def test_string_true_keeps_numeric_looking_text(self) -> None:
+        content = (
+            '<|DSML|function_calls><|DSML|invoke name="write_file">'
+            '<|DSML|parameter name="content" string="true">123</|DSML|parameter>'
+            "</|DSML|invoke></|DSML|function_calls>"
+        )
+        self.assertEqual(calls(content)[0][1], {"content": "123"})
+
+    def test_json_body_inside_dsml_wrapper(self) -> None:
+        content = '<｜DSML｜tool_call>{"tool": "list_directory", "path": "."}</｜DSML｜tool_call>'
+        self.assertEqual(calls(content), [("list_directory", {"path": "."}, None)])
+
+    def test_unclosed_parameter_is_rejected_not_guessed(self) -> None:
+        content = (
+            '<｜DSML｜function_calls><｜DSML｜invoke name="run_shell">'
+            '<｜DSML｜parameter name="command" string="true">rm -rf x'
+            "</｜DSML｜invoke></｜DSML｜function_calls>"
+        )
+        [(name, arguments, error)] = calls(content)
+        self.assertEqual((name, arguments), ("run_shell", {}))
+        self.assertIn("not closed", error)
+
+    def test_invoke_without_name_is_rejected(self) -> None:
+        content = "<｜DSML｜function_calls><｜DSML｜invoke></｜DSML｜invoke></｜DSML｜function_calls>"
+        [(_, _, error)] = calls(content)
+        self.assertIn("no `name`", error)
+
+    def test_truncated_unclosed_block_is_rejected(self) -> None:
+        content = (
+            '<｜DSML｜function_calls><｜DSML｜invoke name="run_shell">'
+            '<｜DSML｜parameter name="command" string="true">ls</｜DSML｜parameter>'
+        )
+        [(_, _, error)] = calls(content, finish_reason="length")
+        self.assertIn("cut off", error)
+        [(_, arguments, error)] = calls(content)
+        self.assertIsNone(error)
+        self.assertEqual(arguments, {"command": "ls"})
+
+    def test_dangling_marker_requests_nothing_and_is_not_visible(self) -> None:
+        parsed = parse_life_loop_output("Done for now.\n< | DSML | tool_call >")
+        self.assertEqual(parsed.tools, [])
+        self.assertEqual(parsed.visible, "Done for now.")
+
+    def test_dsml_inside_a_thought_is_not_a_request(self) -> None:
+        content = "<think>maybe " + self.CANONICAL + "</think>ok"
+        parsed = parse_life_loop_output(content)
+        self.assertEqual(parsed.tools, [])
+        self.assertEqual(parsed.visible, "ok")
