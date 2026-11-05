@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 import mimetypes
+import re
 import time  # re-exported so `artificium.engine.time` stays a patchable name
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -122,6 +123,26 @@ from .engine_stream import (  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
+
+
+_REASONING_REQUEST = re.compile(r"<tool_call\b[^>]*>.*?</tool_call\s*>", re.IGNORECASE | re.DOTALL)
+
+
+def _requests_from_reasoning(reply: "EngineReply") -> str:
+    """Complete tool requests a model wrote only in its reasoning channel.
+
+    Some reasoning models end their turn with the whole answer inside the
+    thinking block and an empty `content`. When that is all there is, the
+    complete `<tool_call>...</tool_call>` pairs are the model's intent; its
+    prose is not forwarded. Anything not closed stays unread, and a reply with
+    any visible content is never touched.
+    """
+
+    if reply.content.strip() or not reply.provider_reasoning:
+        return ""
+    if reply.finish_reason not in {None, "stop", "end_turn"}:
+        return ""
+    return "\n".join(match.group(0) for match in _REASONING_REQUEST.finditer(reply.provider_reasoning))
 
 
 @dataclass
@@ -505,6 +526,9 @@ class JSONEngine(HTTPMixin, Engine):
         except EngineError as exc:
             raise EngineError(_redact(str(exc), self._redaction_secrets(prepared)),
                               kind=exc.kind or "response", status=exc.status, hint=exc.hint) from exc
+        recovered = _requests_from_reasoning(reply)
+        if recovered:
+            reply.content = recovered
         if not reply.content.strip():
             reason = reply.finish_reason or "no finish reason"
             hint = ("Generation ended before a usable answer. Inspect saved usage and the server log: reasoning may have consumed the output allowance, or remaining context may have been exhausted."

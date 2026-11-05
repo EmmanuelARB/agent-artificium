@@ -287,6 +287,28 @@ class EngineContractCase(unittest.TestCase):
         [tool] = parse_life_loop_output(reply.content).tools
         self.assertIsNotNone(tool.parse_error)
 
+    def test_requests_written_only_in_reasoning_are_recovered(self) -> None:
+        engine = make_engine(Config(provider="mistral", model="m"), "key")
+        reasoning = ('Let me emit just the calls.\n<tool_call>{"tool":"run_shell","command":"ls"}</tool_call>\n'
+                     '<tool_call>{"tool":"read_file","path":"a"}</tool_call>')
+        raw = {"choices": [{"message": {"content": "", "reasoning_content": reasoning},
+                            "finish_reason": "stop"}]}
+        with mock.patch.object(type(engine), "_post", return_value=raw):
+            reply = engine.complete_prepared(engine.prepare(MESSAGES))
+        self.assertEqual(reply.content.count("<tool_call>"), 2)
+        self.assertNotIn("Let me emit", reply.content)
+
+    def test_reasoning_without_closed_requests_is_still_an_empty_answer(self) -> None:
+        engine = make_engine(Config(provider="mistral", model="m"), "key")
+        for reasoning, finish in (('x /tool_call>\n{"tool":"run_shell","command":"ls"}', "stop"),
+                                  ('<tool_call>{"tool":"run_shell","command":"ls"}', "stop"),
+                                  ('<tool_call>{"tool":"run_shell","command":"ls"}</tool_call>', "length")):
+            raw = {"choices": [{"message": {"content": "", "reasoning_content": reasoning},
+                                "finish_reason": finish}]}
+            with mock.patch.object(type(engine), "_post", return_value=raw):
+                with self.assertRaises(EngineError):
+                    engine.complete_prepared(engine.prepare(MESSAGES))
+
     def test_mistral_refuses_controls_it_does_not_define(self) -> None:
         for field, value in (("top_k", 40), ("min_p", 0.05), ("repetition_penalty", 1.1)):
             config = Config(provider="mistral", model="m", **{field: value})
