@@ -142,6 +142,7 @@ def _connection_arguments(parser: argparse.ArgumentParser, *, runtime_settings: 
     parser.add_argument("--stall-timeout", metavar="SECONDS|off", help="Abort a streamed response after this many seconds without new data (default: 180)")
     parser.add_argument("--first-token-timeout", metavar="SECONDS|off", help="Limit on waiting for the first streamed data; off leaves prefill bounded only by the request timeout (default: off)")
     parser.add_argument("--stream-responses", choices=["on", "off"], help="Stream model responses; required for the stall timeout")
+    parser.add_argument("--tool-mode", choices=["text", "native"], help="How tools are called: Artificium's <tool_call> text, or the API's native tool calling (chat-completions adapters; default for a new Mistral setup)")
     _generation_arguments(parser)
 
 

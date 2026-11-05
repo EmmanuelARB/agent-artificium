@@ -34,9 +34,9 @@ writes). Never commit them, and never read or print `.secrets.json`.
 |---|---|
 | Life-loop and turns | `runtime.py` (`Artificium`: `run_forever` → `run_turn` → `_collect_round_inputs` → `_run_round_request` → `_record_reply` → `_execute_tools`), `recovery.py`, `initialization.py` |
 | Parsing model output | `life_loop.py` (`parse_life_loop_output`, tolerant tool-call JSON decoding and repair) |
-| Model transport | `engine.py`, `engine_stream.py` (SSE streaming, stall watchdog), `engine_adapters.py`, `engine_providers.py`, `connection.py`, `discovery.py`, `vision.py` |
+| Model transport | `engine.py`, `engine_stream.py` (SSE streaming, stall watchdog), `engine_adapters.py`, `engine_native.py` (native tool calling: history replay), `engine_providers.py`, `connection.py`, `discovery.py`, `vision.py` |
 | Context budget | `context_budget.py`, `calibration.py`, `usage.py` |
-| Tools | `tools.py` (registry and dispatch), `tool_files.py`, `tool_memory.py`, `tool_interactions.py`, `tool_attention.py` (Infinite Attention), `tool_loader.py` (loads agent-editable tools from `mind/tools/`) |
+| Tools | `tools.py` (registry and dispatch), `tool_schemas.py` (native tool definitions), `tool_files.py`, `tool_memory.py`, `tool_interactions.py`, `tool_attention.py` (Infinite Attention), `tool_loader.py` (loads agent-editable tools from `mind/tools/`) |
 | Memory and continuity | `memory.py` (long-term memory, working memory, offloading) |
 | Interactions and events | `interactions.py`, `events.py` |
 | Records and logs | `records.py` (`emit` → lifetime log, `life` → life-loop log, feature logs, model exchanges) |
@@ -84,7 +84,11 @@ writes). Never commit them, and never read or print `.secrets.json`.
   silently applied to an existing `config.json`.
 - **Tools.** A model-facing tool needs: its handler registered in
   `tools.py` (`self._functions`), a canonical example and accepted arguments
-  there, and an entry in `prompts/tools/core_tools.md`. Tool results are
+  there, and an entry in `prompts/tools/core_tools.md`. Native tool calling
+  generates its JSON-schema definition from the handler signature, the
+  documented example, and that section of `core_tools.md`, so a tool taught
+  correctly in both places needs nothing more; keep prose in the catalog free
+  of text-protocol syntax a native-mode model should not copy. Tool results are
   dicts with a `status` and a `summary`; errors must be actionable (say what
   to do next). Agent-built tools live in `workspace/mind/tools/` and are
   invoked through `run_shell` or loaded by `tool_loader.py`; shipped

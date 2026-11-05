@@ -1,4 +1,4 @@
-version = "Artificium-revolution-1.12.7"
+version = "Artificium-revolution-1.13.0"
 
 always = [
   "always/core.md",
@@ -10,6 +10,11 @@ always = [
 
 tool_catalog = [
   "tools/core_tools.md",
+]
+
+# Replaces always/tool_protocol.md when tool_mode is native.
+native_protocol = [
+  "always/tool_protocol_native.md",
 ]
 
 [runtime]
@@ -57,6 +62,7 @@ request_repair = "events/request_repair.md"
 runtime_notice_summary = "events/runtime_notice_summary.md"
 external_event = "events/external_event.md"
 tool_call_repair = "events/tool_call_repair.md"
+tool_call_repair_native = "events/tool_call_repair_native.md"
 tool_execution_error = "events/tool_execution_error.md"
 shell_timeout = "events/shell_timeout.md"
 visual_context_released = "events/visual_context_released.md"

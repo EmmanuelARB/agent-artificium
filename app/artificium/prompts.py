@@ -67,6 +67,7 @@ class PromptPack:
         result: list[str] = []
         result.extend(str(item) for item in self.manifest.get("always", []))
         result.extend(str(item) for item in self.manifest.get("tool_catalog", []))
+        result.extend(str(item) for item in self.manifest.get("native_protocol", []))
         for section in ("runtime", "events"):
             value = self.manifest.get(section, {})
             if isinstance(value, dict):
@@ -88,10 +89,23 @@ class PromptPack:
             text,
         )
 
-    def always(self) -> str:
-        return "\n\n---\n\n".join(self._read(item) for item in self.manifest["always"])
+    TEXT_PROTOCOL = "always/tool_protocol.md"
 
-    def tool_catalog(self) -> str:
+    def always(self, *, native: bool = False) -> str:
+        """The always-sent prompts; native tool calling swaps in its own protocol."""
+
+        items = [str(item) for item in self.manifest["always"]]
+        if native and self.manifest.get("native_protocol"):
+            replacement = [str(item) for item in self.manifest["native_protocol"]]
+            items = [part for item in items
+                     for part in (replacement if item == self.TEXT_PROTOCOL else [item])]
+        return "\n\n---\n\n".join(self._read(item) for item in items)
+
+    def tool_catalog(self, *, native: bool = False) -> str:
+        """The tool catalog; native mode sends it as tool definitions instead."""
+
+        if native:
+            return ""
         return "\n\n---\n\n".join(
             self._read(item) for item in self.manifest.get("tool_catalog", [])
         )

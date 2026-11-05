@@ -76,6 +76,17 @@ def edit_stream_responses(options: SetupOptions, config: Config | None) -> None:
     )
 
 
+def edit_tool_mode(options: SetupOptions, config: Config | None) -> None:
+    current = options.tool_mode or (config.tool_mode if config is not None else "text")
+    while True:
+        raw = _ask("Tool calling: text (Artificium's <tool_call> protocol) or native (the API's own tool calls)",
+                   current).strip().lower()
+        if raw in {"text", "native"}:
+            options.tool_mode = raw
+            return
+        print("Enter text or native.")
+
+
 def edit_first_token_timeout(options: SetupOptions, config: Config | None) -> None:
     current = options.first_token_timeout_seconds
     if current is None and config is not None:
@@ -107,6 +118,7 @@ def model_editor(wizard, options: SetupOptions, current: Config | None) -> None:
         print(f"  7. Stream responses: {'on' if config.stream_responses else 'off'}")
         if config.provider == "openrouter":
             print("  8. Inference provider routing")
+        print(f"  9. Tool calling: {config.tool_mode}")
         print("  reset. Restore generation defaults")
         action = _ask("Setting number or done", "done").lower()
         if action in {"done", "back"}:
@@ -128,6 +140,8 @@ def model_editor(wizard, options: SetupOptions, current: Config | None) -> None:
             edit_stream_responses(options, config)
         elif action == "8" and config.provider == "openrouter":
             options.openrouter_provider = _ask("Inference provider slug, or automatic", configured_openrouter_provider(config.request_options) or "automatic")
+        elif action == "9":
+            edit_tool_mode(options, config)
         elif action == "reset":
             wizard._clear_generation(options)
         else:

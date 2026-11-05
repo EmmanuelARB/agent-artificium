@@ -6,6 +6,7 @@ import urllib.parse
 from typing import Any
 
 from .config import Config
+from .engine_native import native_messages, tools_from_messages
 from .engine import (
     Engine,
     EngineError,
@@ -23,6 +24,21 @@ from .engine import (
 )
 
 
+def _chat_messages(config: Config, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Request messages in the chat-completions shape, tool turns native when asked."""
+
+    if config.tool_mode == "native":
+        messages = native_messages(messages)
+    return materialize_openai_messages(messages)
+
+
+def _native_tools(config: Config, messages: list[dict[str, Any]], payload: dict[str, Any]) -> None:
+    if config.tool_mode == "native":
+        tools = tools_from_messages(messages)
+        if tools:
+            payload["tools"] = tools
+
+
 class OpenAICompatibleEngine(JSONEngine):
     """Best-effort transport for an explicitly OpenAI-compatible custom server."""
 
@@ -35,7 +51,7 @@ class OpenAICompatibleEngine(JSONEngine):
         )
         payload: dict[str, Any] = {
             "model": self.config.model,
-            "messages": materialize_openai_messages(messages),
+            "messages": _chat_messages(self.config, messages),
             **_stream_flag(self.config),
             **_chat_common(self.config),
         }
@@ -44,6 +60,7 @@ class OpenAICompatibleEngine(JSONEngine):
         cache_key = _prompt_cache_key_value(self.config)
         if cache_key:
             payload["prompt_cache_key"] = cache_key
+        _native_tools(self.config, messages, payload)
         _merge_options(payload, self.config.request_options)
         return PreparedRequest(
             adapter="openai_compatible",
@@ -101,7 +118,9 @@ class LlamaCppEngine(OpenAICompatibleEngine):
         _reject(self.config, "llama.cpp", "reasoning_budget_tokens", "reasoning_mode")
         payload: dict[str, Any] = {
             "model": self.config.model,
-            "messages": _llamacpp_messages(messages),
+            "messages": _llamacpp_messages(
+                native_messages(messages) if self.config.tool_mode == "native" else messages
+            ),
             **_stream_flag(self.config),
             **_chat_common(self.config),
         }
@@ -111,6 +130,7 @@ class LlamaCppEngine(OpenAICompatibleEngine):
             payload["chat_template_kwargs"] = {"enable_thinking": True}
         elif self.config.reasoning_effort is not None:
             payload["reasoning_effort"] = self.config.reasoning_effort
+        _native_tools(self.config, messages, payload)
         _merge_options(payload, self.config.request_options)
         return PreparedRequest(
             adapter="llamacpp",
@@ -362,7 +382,7 @@ class OpenRouterEngine(JSONEngine):
     def prepare(self, messages: list[dict[str, Any]]) -> PreparedRequest:
         payload: dict[str, Any] = {
             "model": self.config.model,
-            "messages": materialize_openai_messages(messages),
+            "messages": _chat_messages(self.config, messages),
             **_stream_flag(self.config),
             **_chat_common(self.config),
         }
@@ -393,6 +413,7 @@ class OpenRouterEngine(JSONEngine):
         )
         if explicit:
             payload["provider"] = {"require_parameters": True}
+        _native_tools(self.config, messages, payload)
         _merge_options(payload, self.config.request_options)
         return PreparedRequest(
             adapter="openrouter",
@@ -422,7 +443,7 @@ class MistralEngine(JSONEngine):
             raise EngineError("Mistral reasoning_effort accepts none or high")
         payload: dict[str, Any] = {
             "model": self.config.model,
-            "messages": materialize_openai_messages(messages),
+            "messages": _chat_messages(self.config, messages),
             "stream": bool(self.config.stream_responses),
             **_chat_common(self.config),
         }
@@ -430,6 +451,7 @@ class MistralEngine(JSONEngine):
             payload["random_seed"] = payload.pop("seed")
         if self.config.reasoning_effort is not None:
             payload["reasoning_effort"] = self.config.reasoning_effort
+        _native_tools(self.config, messages, payload)
         _merge_options(payload, self.config.request_options)
         return PreparedRequest(
             adapter="mistral",
@@ -453,7 +475,7 @@ class VLLMEngine(JSONEngine):
             )
         payload: dict[str, Any] = {
             "model": self.config.model,
-            "messages": materialize_openai_messages(messages),
+            "messages": _chat_messages(self.config, messages),
             **_stream_flag(self.config),
             **_chat_common(self.config),
         }
@@ -461,6 +483,7 @@ class VLLMEngine(JSONEngine):
             payload["reasoning_effort"] = self.config.reasoning_effort
         if self.config.reasoning_budget_tokens is not None:
             payload["thinking_token_budget"] = self.config.reasoning_budget_tokens
+        _native_tools(self.config, messages, payload)
         _merge_options(payload, self.config.request_options)
         return PreparedRequest(
             adapter="vllm",

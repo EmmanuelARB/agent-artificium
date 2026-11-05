@@ -35,6 +35,7 @@ NEW_SETUP_DEFAULTS = getattr(_config, "NEW_SETUP_DEFAULTS", {
     "chars_per_token": 3.2,
     "max_tool_output_chars": 20_000,
 })
+NATIVE_TOOL_ADAPTERS = getattr(_config, "NATIVE_TOOL_ADAPTERS", frozenset())
 from .engine import DEFAULT_USER_AGENT, EngineError, make_engine
 from .engine_stream import _STREAMING_ADAPTERS
 from .discovery import (ModelDiscovery, discover_models, discover_provider_models,
@@ -74,6 +75,8 @@ class SetupOptions:
     # True for a streaming-capable adapter; reconfiguring an existing
     # workspace keeps whatever was already saved.
     stream_responses: bool | None = None
+    # None leaves the saved mode alone; a fresh Mistral setup defaults to native.
+    tool_mode: str | None = None
     reasoning: str | None = None
     reasoning_effort: str | None = None
     reasoning_budget_tokens: int | None = None
@@ -713,7 +716,7 @@ class SetupWizard:
             getattr(options, name) is not None for name in (
                 "provider", "model", "api_url", "api_key", "api_key_file", "endpoint", "adapter",
                 "custom_contract_file", "openrouter_provider", "context_window_tokens", "request_timeout_seconds",
-                "stall_timeout_seconds", "first_token_timeout_seconds", "stream_responses", "reasoning", *GENERATION_FIELDS,
+                "stall_timeout_seconds", "first_token_timeout_seconds", "stream_responses", "tool_mode", "reasoning", *GENERATION_FIELDS,
             )
         )):
             raise ValueError("Use configure model for connection and generation settings")
@@ -900,6 +903,12 @@ class SetupWizard:
             values["first_token_timeout_seconds"] = options.first_token_timeout_seconds
         if options.stream_responses is not None:
             values["stream_responses"] = options.stream_responses
+        if options.tool_mode is not None:
+            values["tool_mode"] = options.tool_mode
+        elif current is None and provider == "mistral":
+            values["tool_mode"] = "native"
+        elif current is not None and getattr(current, "tool_mode", "text") == "native" and adapter not in NATIVE_TOOL_ADAPTERS:
+            values["tool_mode"] = "text"
         # A reconnect rechecks capability even when a server keeps the same
         # alias after replacing its model. A prior image rejection is not a
         # permanent verdict on the replacement.

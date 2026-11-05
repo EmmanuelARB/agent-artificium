@@ -41,7 +41,12 @@ def preview_messages(paths: Paths, config: Config, *, self_directive: str | None
     pinned = prompts.runtime("pinned_mind", self_content=self_text.rstrip(), meta_memory_content=meta.rstrip())
     # Same order as Artificium.system_prompt(): tool_catalog (stable) before
     # the pinned Self/meta-memory block (the part most likely to change).
-    parts = [prompts.always(), prompts.tool_catalog(), pinned]
+    native = getattr(config, "tool_mode", "text") == "native"
+    if native:
+        parts = [part for part in (prompts.always(native=True), prompts.tool_catalog(native=True)) if part]
+        parts.append(pinned)
+    else:
+        parts = [prompts.always(), prompts.tool_catalog(), pinned]
     history = read_jsonl(paths.working_context)
     visual = VisualContext(paths, config, Records(paths))
     visual_message = visual.request_message() if include_images else None
@@ -68,7 +73,12 @@ def preview_messages(paths: Paths, config: Config, *, self_directive: str | None
     inputs.append("[CONNECTION CHECK]\nThis is a setup diagnostic, not an active wake. "
                   "Do not perform the orientation or any task. Do not call tools. "
                   "Reply briefly with OK to confirm that you can receive this context.")
-    messages = [{"role": "system", "content": "\n\n---\n\n".join([*parts, header])}, *history,
+    system = {"role": "system", "content": "\n\n---\n\n".join([*parts, header])}
+    if native:
+        from .tool_schemas import native_tool_schemas
+        from .tools import ToolRegistry
+        system["_artificium"] = {"kind": "system", "tools": native_tool_schemas(ToolRegistry, prompts.tool_catalog())}
+    messages = [system, *history,
                 {"role": config.runtime_message_role,
                  "content": prompts.runtime("input_batch", runtime_records="\n\n---\n\n".join(inputs))}]
     if visual_message:

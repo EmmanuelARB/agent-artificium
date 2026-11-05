@@ -134,8 +134,13 @@ MODEL_FIELDS = frozenset({
     "context_window_source", "request_timeout_seconds", "model_capabilities",
     "vision", "model_supports_vision", "prompt_cache", "prompt_cache_key",
     "stream_responses", "stall_timeout_seconds", "first_token_timeout_seconds",
+    "tool_mode",
     *GENERATION_FIELDS,
 })
+
+# Chat-completions adapters that can carry the API's own tool definitions.
+NATIVE_TOOL_ADAPTERS = frozenset({"openai_compatible", "mistral", "openrouter", "vllm", "llamacpp"})
+TOOL_MODES = ("text", "native")
 
 
 def parse_request_timeout(value: float | str | None) -> float | None:
@@ -264,6 +269,10 @@ class Config:
     prompt_cache_key: str | None = None
     # Stream chat-completions replies so progress is visible while generating.
     stream_responses: bool = False
+    # How tool requests travel: "text" is Artificium's own <tool_call> protocol,
+    # readable from any model; "native" sends the API's tool definitions and
+    # reads its structured tool calls (chat-completions adapters only).
+    tool_mode: str = "text"
     # Keep Self and meta-memory frozen in the system prompt between context
     # rebuilds and report later edits as runtime notices, so an edit does not
     # invalidate the provider's cache for the whole working context.
@@ -336,6 +345,13 @@ class Config:
             or not 0.1 <= self.working_memory_fraction <= 1.0
         ):
             raise ValueError("working_memory_fraction must be null or between 0.1 and 1.0")
+        if self.tool_mode not in TOOL_MODES:
+            raise ValueError("tool_mode must be one of: " + ", ".join(TOOL_MODES))
+        if self.tool_mode == "native" and self.adapter not in NATIVE_TOOL_ADAPTERS:
+            raise ValueError(
+                "tool_mode native needs a chat-completions adapter ("
+                + ", ".join(sorted(NATIVE_TOOL_ADAPTERS)) + f"), not {self.adapter}"
+            )
         for name in ("prompt_cache", "stream_responses", "pinned_mind_snapshot"):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be boolean")

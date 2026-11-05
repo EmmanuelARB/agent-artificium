@@ -35,6 +35,7 @@ from .filesystem import (
 from .initialization import Initialization, initialize_mind
 from .interactions import InteractionStore, Notification, NotificationStore
 from .life_loop import ToolIntent, parse_life_loop_output, render_normalized_life_loop_output
+from .tool_schemas import native_tool_schemas
 from .memory import InfiniteAttention, LongTermMemory, TokenEstimator, WorkingMemory
 from .prompts import PromptPack
 from .records import Console, Records
@@ -420,12 +421,35 @@ class Artificium:
             return ""
         return self.prompts.runtime("directives", directives=listing)
 
+    @property
+    def _native_tools(self) -> bool:
+        return getattr(self.config, "tool_mode", "text") == "native"
+
+    def _prompt_blocks(self) -> list[str]:
+        """The always-sent prompt and the tool catalog, in the active tool mode.
+
+        Native mode sends the catalog as tool definitions instead; the kwarg is
+        only passed then, so an older PromptPack overlay keeps working in text mode.
+        """
+
+        if self._native_tools:
+            return [block for block in (self.prompts.always(native=True),
+                                        self.prompts.tool_catalog(native=True)) if block]
+        return [self.prompts.always(), self.prompts.tool_catalog()]
+
+    def _native_tool_schemas(self) -> list[dict[str, Any]]:
+        catalog = self.prompts.tool_catalog()
+        cached = getattr(self, "_schema_cache", None)
+        if cached is None or cached[0] != catalog:
+            cached = (catalog, native_tool_schemas(type(self.tools), catalog))
+            self._schema_cache = cached
+        return cached[1]
+
     def _prompt_overhead(self) -> int:
         self_text, meta = self._pinned_mind_texts()
         text = "\n".join(
             [
-                self.prompts.always(),
-                self.prompts.tool_catalog(),
+                *self._prompt_blocks(),
                 self.prompts.runtime(
                     "pinned_mind",
                     self_content=self_text,
@@ -516,7 +540,7 @@ class Artificium:
         # tool_catalog before the pinned block (B6a): it never changes at
         # runtime, while Self/meta-memory can, so putting the volatile part
         # last keeps the largest possible stable, cacheable prefix.
-        blocks = [self.prompts.always(), self.prompts.tool_catalog(), pinned]
+        blocks = [*self._prompt_blocks(), pinned]
         directives = self._directives_block()
         if directives:
             blocks.append(directives)
@@ -531,9 +555,11 @@ class Artificium:
         self, inputs: list[str], *, wake_reason: str,
         working: list[dict[str, Any]] | None = None, include_images: bool = True,
     ) -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": self.system_prompt()}
-        ]
+        system: dict[str, Any] = {"role": "system", "content": self.system_prompt()}
+        if self._native_tools:
+            # Only life-loop requests carry tool definitions; the engine reads them here.
+            system["_artificium"] = {"kind": "system", "tools": self._native_tool_schemas()}
+        messages: list[dict[str, Any]] = [system]
         messages.extend(self.working.load() if working is None else working)
         if inputs:
             messages.append(
@@ -1846,7 +1872,7 @@ class Artificium:
         self._append_runtime(
             [
                 self.prompts.event(
-                    "tool_call_repair",
+                    "tool_call_repair_native" if self._native_tools else "tool_call_repair",
                     repair_cases=json_dumps(
                         repair_cases,
                         pretty=True,
