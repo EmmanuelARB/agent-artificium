@@ -110,6 +110,7 @@ def _redact(text: str, secrets: list[str | None]) -> str:
 # tests that patch it at that path. JSONEngine/HTTPMixin below call these
 # through this module's own globals, so a patch on `artificium.engine.X`
 # reaches them regardless of where the function is defined.
+from . import engine_stream as _engine_stream  # noqa: E402
 from .engine_stream import (  # noqa: E402
     _STREAMING_ADAPTERS,
     StreamingUnsupported,
@@ -536,11 +537,16 @@ def _chat_response(raw: dict[str, Any]) -> EngineReply:
     elif isinstance(content_value, list):
         content = "\n".join(
             str(item.get("text") or item.get("content") or "")
-            for item in content_value if isinstance(item, dict)
+            for item in content_value
+            if isinstance(item, dict) and item.get("type") != "thinking"
         ).strip()
     else:
         content = ""
     reasoning = message.get("reasoning_content") or message.get("reasoning")
+    if not reasoning and isinstance(content_value, list):
+        # Resolved defensively so an older engine_stream overlay keeps working.
+        split = getattr(_engine_stream, "_split_content_chunks", None)
+        reasoning = split(content_value)[1] if split else ""
     if not reasoning and isinstance(message.get("reasoning_details"), list):
         reasoning = "\n".join(
             str(item.get("text") or item.get("content") or "")

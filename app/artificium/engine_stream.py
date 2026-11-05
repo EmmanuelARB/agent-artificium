@@ -238,6 +238,11 @@ def _stream_chat_completion(
                                 if isinstance(delta.get("role"), str):
                                     role = delta["role"]
                                 piece = delta.get("content")
+                                if isinstance(piece, list):
+                                    piece_text, piece_thinking = _split_content_chunks(piece)
+                                    if piece_thinking:
+                                        reasoning_parts.append(piece_thinking)
+                                    piece = piece_text
                                 if isinstance(piece, str):
                                     content_parts.append(piece)
                                 reasoning_piece = delta.get("reasoning_content")
@@ -318,6 +323,30 @@ def _stream_chat_completion(
             raise EngineError("Connection failed: " + _redact(str(exc), redactions), kind="network",
                               hint="Check the server address and connection.") from exc
     raise AssertionError("request attempts must be positive")
+
+
+def _split_content_chunks(chunks: list[Any]) -> tuple[str, str]:
+    """Split a content list into answer text and thinking text.
+
+    Some chat APIs return (or stream) `content` as typed chunks: `text` chunks
+    carry the answer, `thinking` chunks a nested list of text chunks.
+    """
+
+    text: list[str] = []
+    thinking: list[str] = []
+    for item in chunks:
+        if isinstance(item, str):
+            text.append(item)
+        elif isinstance(item, dict):
+            inner = item.get("thinking")
+            if item.get("type") == "thinking" or isinstance(inner, (list, str)):
+                if isinstance(inner, list):
+                    inner = _split_content_chunks(inner)[0]
+                if isinstance(inner, str):
+                    thinking.append(inner)
+            else:
+                text.append(str(item.get("text") or item.get("content") or ""))
+    return "".join(text), "".join(thinking)
 
 
 def _stream_flag(config: Config) -> dict[str, Any]:

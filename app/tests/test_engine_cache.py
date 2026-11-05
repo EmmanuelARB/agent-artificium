@@ -395,6 +395,20 @@ class StreamingTransportCase(unittest.TestCase):
         self.assertEqual(reply.content, "Answer")
         self.assertEqual(reply.provider_reasoning, "Let me think. ")
 
+    def test_typed_content_chunks_split_answer_from_thinking(self) -> None:
+        self.server.chunks = [
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": [{"type": "text", "text": "Let me "}]}]}}]},
+            {"choices": [{"index": 0, "delta": {"content": [
+                {"type": "thinking", "thinking": [{"type": "text", "text": "think."}]},
+                {"type": "text", "text": "Ans"}]}}]},
+            {"choices": [{"index": 0, "delta": {"content": [{"type": "text", "text": "wer"}]},
+                          "finish_reason": "stop"}]},
+        ]
+        reply = self.engine().complete([{"role": "user", "content": "hi"}])
+        self.assertEqual(reply.content, "Answer")
+        self.assertEqual(reply.provider_reasoning, "Let me think.")
+
     def test_llamacpp_timings_in_final_chunk_reach_the_raw_reply(self) -> None:
         self.server.chunks = [
             {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}]},

@@ -249,6 +249,15 @@ class EngineContractCase(unittest.TestCase):
         self.assertIs(body["stream"], True)
         self.assertNotIn("stream_options", body)
 
+    def test_typed_content_chunks_in_a_plain_reply_keep_answer_and_thinking_apart(self) -> None:
+        from artificium.engine import _chat_response
+        reply = _chat_response({"choices": [{"message": {"content": [
+            {"type": "thinking", "thinking": [{"type": "text", "text": "hmm"}]},
+            {"type": "text", "text": "OK"},
+        ]}, "finish_reason": "stop"}]})
+        self.assertEqual(reply.content, "OK")
+        self.assertEqual(reply.provider_reasoning, "hmm")
+
     def test_mistral_refuses_controls_it_does_not_define(self) -> None:
         for field, value in (("top_k", 40), ("min_p", 0.05), ("repetition_penalty", 1.1)):
             config = Config(provider="mistral", model="m", **{field: value})
