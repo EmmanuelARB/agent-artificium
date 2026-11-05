@@ -125,24 +125,52 @@ _logger = logging.getLogger(__name__)
 
 
 
-_REASONING_REQUEST = re.compile(r"<tool_call\b[^>]*>.*?</tool_call\s*>", re.IGNORECASE | re.DOTALL)
+_REASONING_OPEN = re.compile(r"<tool_call\b[^>]*>", re.IGNORECASE)
+_REASONING_CLOSE = re.compile(r"\s*</tool_call\s*>", re.IGNORECASE)
+_REASONING_RESIDUE = re.compile(r"[\s/|\\]*(?:tool_call>)?\s*", re.IGNORECASE)
+_REASONING_DECODER = json.JSONDecoder(strict=False)
 
 
 def _requests_from_reasoning(reply: "EngineReply") -> str:
-    """Complete tool requests a model wrote only in its reasoning channel.
+    """Tool requests a model wrote only in its reasoning channel.
 
     Some reasoning models end their turn with the whole answer inside the
     thinking block and an empty `content`. When that is all there is, the
-    complete `<tool_call>...</tool_call>` pairs are the model's intent; its
-    prose is not forwarded. Anything not closed stays unread, and a reply with
-    any visible content is never touched.
+    requests in it are the model's intent and its prose is not forwarded. A
+    request counts when it is a complete JSON object that is either closed
+    with `</tool_call>` or is the last thing in the reasoning (a model that
+    mangles or drops the closing tag ends its turn right after the object).
+    A reply with any visible content is never touched, and a cut-off
+    generation is not recovered.
     """
 
     if reply.content.strip() or not reply.provider_reasoning:
         return ""
     if reply.finish_reason not in {None, "stop", "end_turn"}:
         return ""
-    return "\n".join(match.group(0) for match in _REASONING_REQUEST.finditer(reply.provider_reasoning))
+    try:
+        from .life_loop import repair_mangled_tags
+    except ImportError:  # an older life_loop overlay
+        def repair_mangled_tags(value: str) -> str:
+            return value
+    text = repair_mangled_tags(reply.provider_reasoning)
+    requests: list[str] = []
+    for opening in _REASONING_OPEN.finditer(text):
+        start = opening.end()
+        while start < len(text) and text[start].isspace():
+            start += 1
+        if not text.startswith("{", start):
+            continue
+        try:
+            _, end = _REASONING_DECODER.raw_decode(text, start)
+        except ValueError:
+            continue
+        rest = text[end:]
+        closed = _REASONING_CLOSE.match(rest) is not None
+        trailing = _REASONING_RESIDUE.fullmatch(rest) is not None or _REASONING_OPEN.match(rest.lstrip()) is not None
+        if closed or trailing:
+            requests.append(f"<tool_call>{text[start:end]}</tool_call>")
+    return "\n".join(requests)
 
 
 @dataclass

@@ -379,3 +379,25 @@ class DsmlRequestForms(unittest.TestCase):
         parsed = parse_life_loop_output(content)
         self.assertEqual(parsed.tools, [])
         self.assertEqual(parsed.visible, "ok")
+
+
+class MangledOpeningTags(unittest.TestCase):
+    def test_bracketless_opening_markers_are_read_and_residue_dropped(self) -> None:
+        content = ('Probing.tool_call>\n{"tool":"run_shell","command":"ls"}tool_call>\n'
+                   'tool_call>\n{"tool":"read_file","path":"a"}\n/tool_call>')
+        parsed = parse_life_loop_output(content)
+        self.assertEqual([(t.name, t.parse_error) for t in parsed.tools],
+                         [("run_shell", None), ("read_file", None)])
+        self.assertEqual(parsed.visible, "Probing.")
+
+    def test_marker_alone_on_its_line_is_read(self) -> None:
+        content = 'Probing.\n/tool_call>\n{"tool":"run_shell","command":"ls"}'
+        parsed = parse_life_loop_output(content)
+        self.assertEqual([(t.name, t.arguments, t.parse_error) for t in parsed.tools],
+                         [("run_shell", {"command": "ls"}, None)])
+        self.assertEqual(parsed.visible, "Probing.")
+        self.assertEqual(parsed.raw, content)
+
+    def test_a_closing_tag_before_an_object_is_not_turned_into_a_request(self) -> None:
+        content = '<tool_call>{"tool":"run_shell","command":"ls"}</tool_call>\n{"tool":"read_file","path":"a"}'
+        self.assertEqual([t.name for t in parse_life_loop_output(content).tools], ["run_shell"])

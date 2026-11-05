@@ -298,15 +298,32 @@ class EngineContractCase(unittest.TestCase):
         self.assertEqual(reply.content.count("<tool_call>"), 2)
         self.assertNotIn("Let me emit", reply.content)
 
-    def test_reasoning_without_closed_requests_is_still_an_empty_answer(self) -> None:
+    def test_mangled_trailing_request_in_reasoning_is_recovered(self) -> None:
         engine = make_engine(Config(provider="mistral", model="m"), "key")
-        for reasoning, finish in (('x /tool_call>\n{"tool":"run_shell","command":"ls"}', "stop"),
-                                  ('<tool_call>{"tool":"run_shell","command":"ls"}', "stop"),
-                                  ('<tool_call>{"tool":"run_shell","command":"ls"}</tool_call>', "length")):
+        reasoning = ('Continuing the work.\n/tool_call>\n'
+                     '{"tool":"run_shell","command": "python3 t.py 2>&1 | head -30"}')
+        raw = {"choices": [{"message": {"content": "", "reasoning_content": reasoning},
+                            "finish_reason": "stop"}]}
+        with mock.patch.object(type(engine), "_post", return_value=raw):
+            reply = engine.complete_prepared(engine.prepare(MESSAGES))
+        from artificium.life_loop import parse_life_loop_output
+        [tool] = parse_life_loop_output(reply.content).tools
+        self.assertEqual((tool.name, tool.arguments, tool.parse_error),
+                         ("run_shell", {"command": "python3 t.py 2>&1 | head -30"}, None))
+
+    def test_reasoning_that_does_not_end_in_a_whole_request_is_still_an_empty_answer(self) -> None:
+        engine = make_engine(Config(provider="mistral", model="m"), "key")
+        cases = (
+            ('Hmm.\n/tool_call>\n{"tool":"run_shell","command":"l', "stop"),               # object cut off
+            ('<tool_call>{"tool":"run_shell","command":"ls"}\nActually, wait.', "stop"),    # drafted, then more thought
+            ('<tool_call>{"tool":"run_shell","command":"ls"}</tool_call>', "length"),        # generation cut off
+            ('I should run ls.', "stop"),                                                     # no request at all
+        )
+        for reasoning, finish in cases:
             raw = {"choices": [{"message": {"content": "", "reasoning_content": reasoning},
                                 "finish_reason": finish}]}
             with mock.patch.object(type(engine), "_post", return_value=raw):
-                with self.assertRaises(EngineError):
+                with self.assertRaises(EngineError, msg=reasoning):
                     engine.complete_prepared(engine.prepare(MESSAGES))
 
     def test_mistral_refuses_controls_it_does_not_define(self) -> None:

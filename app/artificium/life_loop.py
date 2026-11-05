@@ -28,6 +28,13 @@ FUNCTION_PATTERN = re.compile(
 PARAMETER_PATTERN = re.compile(
     r"<parameter=(?P<key>[^>\s]+)\s*>\n?(?P<value>.*?)\n?</parameter\s*>", re.IGNORECASE | re.DOTALL
 )
+# An opening tag that lost its bracket ("tool_call>", "/tool_call>", "|tool_call>"), possibly
+# glued to the text or object before it, and followed by a flat request object. The lookbehind
+# keeps "</tool_call>" (a real closing tag) and words ending in "tool_call" out of it.
+MANGLED_OPEN_PATTERN = re.compile(
+    r"(?<![\w<|/\\])(?:<\||[/|<\\])?tool_call[ \t]*>[ \t]*(?=\r?\n?[ \t]*\{\s*\"(?:tool|name)\"\s*:)"
+)
+MANGLED_RESIDUE_PATTERN = re.compile(r"(?<![\w<|/\\])[/|\\]?tool_call>")
 # DeepSeek's native request markup: <｜DSML｜function_calls><｜DSML｜invoke name="X">
 # <｜DSML｜parameter name="K" string="true">V</｜DSML｜parameter>...; the bars may be
 # full-width or ASCII and models sometimes space the tags out ("< | DSML | tool_call >").
@@ -541,6 +548,15 @@ class LifeLoopOutput:
     visible: str
 
 
+def repair_mangled_tags(content: str) -> str:
+    """Restore `<tool_call>` where a model dropped the bracket of an opening tag.
+
+    Only an opening marker followed by a flat request object is touched; the object itself is still validated by the parser.
+    """
+
+    return MANGLED_OPEN_PATTERN.sub("<tool_call>", content)
+
+
 def parse_life_loop_output(content: str, *, finish_reason: str | None = None) -> LifeLoopOutput:
     """Split a reply into thoughts, tool requests, and visible text.
 
@@ -553,6 +569,8 @@ def parse_life_loop_output(content: str, *, finish_reason: str | None = None) ->
     never requests.
     """
 
+    original = content
+    content = repair_mangled_tags(content)
     truncated = finish_reason in TRUNCATED_FINISH_REASONS
     thoughts: list[str] = []
     tools: list[ToolIntent] = []
@@ -696,8 +714,11 @@ def parse_life_loop_output(content: str, *, finish_reason: str | None = None) ->
     visible_parts.append(content[cursor:])
     # A stray closing tag left by a request that ended at its JSON is not text.
     visible_parts = [DSML_TAG_PATTERN.sub("", TOOL_CLOSE_PATTERN.sub("", part)) for part in visible_parts]
+    if tools:
+        # What a mangled closing tag leaves behind after a request that ran.
+        visible_parts = [MANGLED_RESIDUE_PATTERN.sub("", part) for part in visible_parts]
     visible = "\n".join(part.strip() for part in visible_parts if part.strip()).strip()
-    return LifeLoopOutput(content, thoughts, tools, visible)
+    return LifeLoopOutput(original, thoughts, tools, visible)
 
 
 def render_normalized_life_loop_output(
