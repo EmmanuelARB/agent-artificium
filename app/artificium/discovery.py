@@ -44,7 +44,7 @@ def _supported(value: Any) -> bool | None:
 def _model_detail(item: dict[str, Any]) -> dict[str, Any]:
     detail: dict[str, Any] = {"owned_by": str(item.get("owned_by") or "")}
     top = item.get("top_provider") if isinstance(item.get("top_provider"), dict) else {}
-    context = _positive(item.get("max_model_len") or item.get("context_length") or item.get("max_input_tokens") or top.get("context_length"))
+    context = _positive(item.get("max_model_len") or item.get("max_context_length") or item.get("context_length") or item.get("max_input_tokens") or top.get("context_length"))
     output = _positive(item.get("max_completion_tokens") or item.get("max_tokens") or top.get("max_completion_tokens"))
     if context:
         detail["context_length"] = context
@@ -69,6 +69,8 @@ def _model_detail(item: dict[str, Any]) -> dict[str, Any]:
             detail["vision"] = True
     elif isinstance(caps, dict):
         image = _supported(caps.get("image_input"))
+        if image is None:
+            image = _supported(caps.get("vision"))
         thinking = _supported(caps.get("thinking"))
         if image is not None:
             detail["vision"] = image

@@ -258,6 +258,16 @@ class EngineContractCase(unittest.TestCase):
         self.assertEqual(reply.content, "OK")
         self.assertEqual(reply.provider_reasoning, "hmm")
 
+    def test_mistral_model_list_gives_context_window_and_vision(self) -> None:
+        from artificium.discovery import _model_detail
+        detail = _model_detail({"id": "m", "owned_by": "mistralai", "max_context_length": 262144,
+                                "capabilities": {"completion_chat": True, "vision": True}})
+        self.assertEqual(detail["context_length"], 262144)
+        self.assertTrue(detail["vision"])
+        text_only = _model_detail({"id": "t", "max_context_length": 32768,
+                                   "capabilities": {"completion_chat": True, "vision": False}})
+        self.assertFalse(text_only["vision"])
+
     def test_mistral_refuses_controls_it_does_not_define(self) -> None:
         for field, value in (("top_k", 40), ("min_p", 0.05), ("repetition_penalty", 1.1)):
             config = Config(provider="mistral", model="m", **{field: value})
