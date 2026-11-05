@@ -351,7 +351,7 @@ The agent can turn a missing capability into a program under `mind/tools/`, test
 
 Custom apparatus runs through the shell. Adding a file does not register a native harness tool; meta-memory and operating memories tell the agent that the program exists, when it helps, and how to call it.
 
-A fresh mind ships with two such tools: the scheduler (feature 14) and `mind/tools/search.py`, a standard-library web search that tries Brave, then Wikipedia, then DuckDuckGo, and says which engine answered or why none did. Pages found this way can be read with an installed text browser such as `lynx -dump URL`.
+A fresh mind ships with two such tools: the scheduler (feature 14) and `mind/tools/search.py`, a standard-library web search that tries Brave, then Wikipedia, then DuckDuckGo, and says which engine answered or why none did. Pages found this way can be read with an installed text browser such as `lynx -dump URL`. `mind/tools/browser.py` drives a real Chrome/Chromium window (visible when started inside a desktop session) over the DevTools protocol, reading pages as a compact accessibility snapshot rather than screenshots; it finds or installs a browser by itself (system package manager with root or passwordless sudo, otherwise a Chrome for Testing download into the workspace).
 
 These primitives compose into workflows: a sensor publishes observations as interactions; a converter makes an attachment readable; an analyzer produces evidence for a memory; a client connects another agent or service. Browsers, remote UIs, sensors, and service bridges are things to build or install, not bundled integrations.
 

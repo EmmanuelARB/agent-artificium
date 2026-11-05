@@ -1,0 +1,27 @@
+Tool
+
+Executable: `mind/tools/browser.py` (standard library only, run through `run_shell`).
+Runtime state: `mind/space/browser/` (browser profile with logins and cookies,
+`state.json`, saved page texts, screenshots, `browser.log`).
+
+A real Chrome/Chromium window driven over the DevTools protocol. Use it when a
+task needs a logged-in session, JavaScript-rendered pages, forms, or clicking;
+for plain reading, `fetch.py` is far cheaper. `python3 mind/tools/browser.py
+--help` and the script's docstring are the authoritative interface.
+
+Typical loop: `start`, `goto URL`, `snapshot` (title, url, and interactive
+elements as `[12] button "Sign in"`), then `click 12` or `type 13 "text"
+--submit`, then `snapshot` again. Ids belong to the snapshot that produced
+them and go stale when the page changes. `text` gives the readable page text,
+`shot` a PNG for `load_images` (use sparingly, images are expensive), `eval`
+runs JavaScript.
+
+`start` finds an installed browser, or installs one: the system package
+manager when running as root or with passwordless sudo (Debian, Fedora, Arch,
+openSUSE), otherwise a Chrome for Testing download into the workspace (x86_64
+Linux). The window is visible when the instance was started inside a desktop
+session; if no display can be found the tool says so, and `start --headless`
+works anywhere. Clicks and keystrokes are real input events with natural
+pacing. Use the persistent profile like a person's browser: do not log in
+anywhere the operator has not asked for, and if a site blocks automation or
+shows a challenge, report it instead of working around it.

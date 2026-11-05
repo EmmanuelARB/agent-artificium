@@ -252,7 +252,7 @@ class ReleaseCase(unittest.TestCase):
                              for name in names))
         self.assertIn('artificium.py', names)
         self.assertIn('README.md', names)
-        self.assertEqual(sum(name.startswith('app/seed/memory/') for name in names), 11)
+        self.assertEqual(sum(name.startswith('app/seed/memory/') for name in names), 12)
         seed=(clone/'app/seed/self.txt').read_text()
         self.assertIn('persistent general-purpose agent', seed)
         guide=(clone/'app/seed/memory/harness/tool-building-and-workspace.txt').read_text()
