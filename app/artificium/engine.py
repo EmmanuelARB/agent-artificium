@@ -591,6 +591,7 @@ def _chat_common(config: Config) -> dict[str, Any]:
 from .engine_adapters import (  # noqa: E402
     CustomJSONEngine,
     LlamaCppEngine,
+    MistralEngine,
     OpenAICompatibleEngine,
     OpenRouterEngine,
     VLLMEngine,
@@ -611,6 +612,7 @@ def make_engine(config: Config, api_key: str | None) -> Engine:
         "custom_json": CustomJSONEngine,
         "openrouter": OpenRouterEngine,
         "vllm": VLLMEngine,
+        "mistral": MistralEngine,
         "ollama": OllamaEngine,
         "openai_responses": OpenAIResponsesEngine,
         "gemini": GeminiEngine,

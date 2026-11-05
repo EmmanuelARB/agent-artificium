@@ -449,6 +449,7 @@ A single served model is selected automatically, and no placeholder API key is n
 | `llamacpp` | `/v1/chat/completions` | `http://127.0.0.1:8080/v1` |
 | `ollama` | Native `/api/chat` | `http://127.0.0.1:11434` |
 | `vllm` | `/v1/chat/completions` | `http://127.0.0.1:8000/v1` |
+| `mistral` | `/v1/chat/completions` | — |
 | `openrouter` | `/api/v1/chat/completions` | — |
 | `openai` | `/v1/responses` | — |
 | `gemini` | `models/{model}:generateContent` | — |
@@ -469,7 +470,7 @@ For llama.cpp, discovery reads `/v1/models` and `/props?model=ID`: `default_gene
 
 ### Credentials and connection checks
 
-Use the masked setup prompt, `--api-key-file /path/to/key`, `ARTIFICIUM_API_KEY`, or the provider variable: `LLAMA_API_KEY`, `OLLAMA_API_KEY`, `VLLM_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY`. Avoid typing a secret directly into a shell command.
+Use the masked setup prompt, `--api-key-file /path/to/key`, `ARTIFICIUM_API_KEY`, or the provider variable: `LLAMA_API_KEY`, `OLLAMA_API_KEY`, `VLLM_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY`. Avoid typing a secret directly into a shell command.
 
 Saved keys live in `.secrets.json` in the project folder (mode 0600). Git ignores it and it sits outside `workspace/`, so it survives upgrades and resets. An explicitly saved key takes precedence, so runtime uses the key that passed verification. Otherwise `ARTIFICIUM_API_KEY` comes before the provider variable and the saved fallback. Saved keys are bound to provider and address. `key` verifies a replacement before saving it, and a running agent reloads it. The agent can read its key; apply the spending controls from Quick start.
 

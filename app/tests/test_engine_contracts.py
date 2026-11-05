@@ -227,6 +227,36 @@ class EngineContractCase(unittest.TestCase):
         with self.assertRaisesRegex(EngineError, "none, low, medium, or high"):
             make_engine(config, None).prepare(MESSAGES)
 
+    def test_mistral_uses_its_own_field_names_and_url(self) -> None:
+        config = Config(
+            provider="mistral",
+            model="mistral-large-latest",
+            max_output_tokens=4000,
+            temperature=0.3,
+            seed=7,
+            reasoning_effort="high",
+            stream_responses=True,
+        )
+        self.assertEqual(config.adapter, "mistral")
+        prepared = make_engine(config, "key").prepare(MESSAGES)
+        self.assertEqual(prepared.url, "https://api.mistral.ai/v1/chat/completions")
+        self.assertEqual(prepared.headers, {"Authorization": "Bearer key"})
+        body = prepared.payload
+        self.assertEqual(body["random_seed"], 7)
+        self.assertNotIn("seed", body)
+        self.assertEqual(body["max_tokens"], 4000)
+        self.assertEqual(body["reasoning_effort"], "high")
+        self.assertIs(body["stream"], True)
+        self.assertNotIn("stream_options", body)
+
+    def test_mistral_refuses_controls_it_does_not_define(self) -> None:
+        for field, value in (("top_k", 40), ("min_p", 0.05), ("repetition_penalty", 1.1)):
+            config = Config(provider="mistral", model="m", **{field: value})
+            with self.assertRaisesRegex(EngineError, field):
+                make_engine(config, "key").prepare(MESSAGES)
+        with self.assertRaisesRegex(EngineError, "none or high"):
+            make_engine(Config(provider="mistral", model="m", reasoning_effort="low"), "key").prepare(MESSAGES)
+
     def test_openai_uses_responses_api_reasoning_and_output_fields(self) -> None:
         config = Config(
             provider="openai",

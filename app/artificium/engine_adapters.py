@@ -405,6 +405,43 @@ class OpenRouterEngine(JSONEngine):
         return _chat_response(raw)
 
 
+class MistralEngine(JSONEngine):
+    """Mistral La Plateforme Chat Completions.
+
+    The seed goes in `random_seed`. top_k, min_p and repetition_penalty are not
+    part of the API, so they are refused instead of silently dropped. Streaming
+    sends no `stream_options`: the API reports usage in the final chunk itself.
+    """
+
+    def prepare(self, messages: list[dict[str, Any]]) -> PreparedRequest:
+        _reject(
+            self.config, "Mistral Chat Completions",
+            "top_k", "min_p", "repetition_penalty", "reasoning_budget_tokens", "reasoning_mode",
+        )
+        if self.config.reasoning_effort is not None and self.config.reasoning_effort not in {"none", "high"}:
+            raise EngineError("Mistral reasoning_effort accepts none or high")
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": materialize_openai_messages(messages),
+            "stream": bool(self.config.stream_responses),
+            **_chat_common(self.config),
+        }
+        if "seed" in payload:
+            payload["random_seed"] = payload.pop("seed")
+        if self.config.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.config.reasoning_effort
+        _merge_options(payload, self.config.request_options)
+        return PreparedRequest(
+            adapter="mistral",
+            url=f"{self.config.base_url}/{self.config.endpoint}",
+            headers={"Authorization": f"Bearer {self.api_key}"} if self.api_key else {},
+            payload=payload,
+        )
+
+    def parse(self, raw: dict[str, Any]) -> EngineReply:
+        return _chat_response(raw)
+
+
 class VLLMEngine(JSONEngine):
     def prepare(self, messages: list[dict[str, Any]]) -> PreparedRequest:
         _reject(self.config, "vLLM Chat Completions", "reasoning_mode")

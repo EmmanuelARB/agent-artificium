@@ -88,7 +88,7 @@ def request_json(url: str, *, payload: dict[str, Any] | None = None,
 # Chat-completions-shaped adapters whose wire format defines `stream` and
 # server-sent-event chunking. Other adapters (openai_responses, anthropic,
 # gemini, ollama, custom_json) keep their own transport unchanged.
-_STREAMING_ADAPTERS = frozenset({"openai_compatible", "llamacpp", "vllm", "openrouter"})
+_STREAMING_ADAPTERS = frozenset({"openai_compatible", "llamacpp", "vllm", "openrouter", "mistral"})
 
 
 # HTTP statuses a server plausibly uses to reject an unsupported `stream`

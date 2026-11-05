@@ -232,6 +232,7 @@ def custom_contract_requires_api_key(contract: dict[str, object]) -> bool:
 PROVIDER_ORDER = (
     ("openrouter", "OpenRouter"),
     ("openai", "OpenAI"),
+    ("mistral", "Mistral"),
     ("ollama", "Ollama (local or remote)"),
     ("vllm", "vLLM (local or remote)"),
     ("llamacpp", "llama.cpp / llama-server (local or remote)"),
@@ -330,7 +331,7 @@ def normalize_provider_endpoint(value: str, *, provider: str) -> tuple[str, str,
         return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, "", "")).rstrip("/"), preset.endpoint, preset.adapter
     if provider != "ollama":
         base, endpoint = normalize_openai_endpoint(value, provider=provider)
-        adapter = provider if provider in {"vllm", "llamacpp"} else "openai_compatible"
+        adapter = provider if provider in {"vllm", "llamacpp", "mistral"} else "openai_compatible"
         return base, endpoint, adapter
 
     parsed = _url_parts(value)

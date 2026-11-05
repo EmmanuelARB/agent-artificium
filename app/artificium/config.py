@@ -62,6 +62,13 @@ PROVIDERS: dict[str, ProviderPreset] = {
         "OLLAMA_API_KEY",
         requires_api_key=False,
     ),
+    "mistral": ProviderPreset(
+        "mistral",
+        "https://api.mistral.ai/v1",
+        "chat/completions",
+        "mistral",
+        "MISTRAL_API_KEY",
+    ),
     "vllm": ProviderPreset(
         "vllm",
         "http://127.0.0.1:8000/v1",
@@ -85,7 +92,7 @@ def requires_api_key(provider: str, adapter: str = "openai_compatible") -> bool:
     preset = PROVIDERS.get(provider.lower().strip())
     if preset is not None:
         return preset.requires_api_key
-    return adapter in {"anthropic", "gemini", "openai_responses", "openrouter"}
+    return adapter in {"anthropic", "gemini", "mistral", "openai_responses", "openrouter"}
 
 
 REASONING_EFFORTS = ("none", "on", "minimal", "low", "medium", "high", "xhigh", "max")
@@ -310,6 +317,7 @@ class Config:
             "anthropic",
             "ollama",
             "vllm",
+            "mistral",
             "custom_json",
         }
         if self.adapter not in adapters:
