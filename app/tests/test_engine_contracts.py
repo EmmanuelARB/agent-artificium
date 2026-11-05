@@ -268,6 +268,25 @@ class EngineContractCase(unittest.TestCase):
                                    "capabilities": {"completion_chat": True, "vision": False}})
         self.assertFalse(text_only["vision"])
 
+    def test_native_tool_calls_become_tool_call_text_the_parser_reads(self) -> None:
+        from artificium.engine import _chat_response
+        from artificium.life_loop import parse_life_loop_output
+        reply = _chat_response({"choices": [{"message": {"content": "", "tool_calls": [
+            {"id": "a", "function": {"name": "run_shell", "arguments": '{"command": "ls"}'}},
+            {"id": "b", "function": {"name": "read_file", "arguments": {"path": "x"}}},
+        ]}, "finish_reason": "tool_calls"}]})
+        parsed = parse_life_loop_output(reply.content)
+        self.assertEqual([(t.name, t.arguments, t.parse_error) for t in parsed.tools],
+                         [("run_shell", {"command": "ls"}, None), ("read_file", {"path": "x"}, None)])
+
+    def test_unreadable_native_arguments_are_rejected_not_guessed(self) -> None:
+        from artificium.engine import _chat_response
+        from artificium.life_loop import parse_life_loop_output
+        reply = _chat_response({"choices": [{"message": {"content": "", "tool_calls": [
+            {"function": {"name": "run_shell", "arguments": '{"command": "ls'}}]}, "finish_reason": "tool_calls"}]})
+        [tool] = parse_life_loop_output(reply.content).tools
+        self.assertIsNotNone(tool.parse_error)
+
     def test_mistral_refuses_controls_it_does_not_define(self) -> None:
         for field, value in (("top_k", 40), ("min_p", 0.05), ("repetition_penalty", 1.1)):
             config = Config(provider="mistral", model="m", **{field: value})

@@ -409,6 +409,18 @@ class StreamingTransportCase(unittest.TestCase):
         self.assertEqual(reply.content, "Answer")
         self.assertEqual(reply.provider_reasoning, "Let me think.")
 
+    def test_streamed_native_tool_call_fragments_are_assembled(self) -> None:
+        self.server.chunks = [
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "", "tool_calls": [
+                {"index": 0, "function": {"name": "run_shell", "arguments": '{"command": '}}]}}]},
+            {"choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "function": {"arguments": '"ls"}'}}]}, "finish_reason": "tool_calls"}]},
+        ]
+        reply = self.engine().complete([{"role": "user", "content": "hi"}])
+        self.assertEqual(reply.finish_reason, "tool_calls")
+        self.assertIn('"name": "run_shell"', reply.content)
+        self.assertIn('"command": "ls"', reply.content)
+
     def test_llamacpp_timings_in_final_chunk_reach_the_raw_reply(self) -> None:
         self.server.chunks = [
             {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}]},

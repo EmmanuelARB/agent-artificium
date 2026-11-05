@@ -542,6 +542,11 @@ def _chat_response(raw: dict[str, Any]) -> EngineReply:
         ).strip()
     else:
         content = ""
+    if message.get("tool_calls"):
+        # Resolved defensively so an older engine_stream overlay keeps working.
+        render = getattr(_engine_stream, "_render_native_tool_calls", None)
+        native = render(message["tool_calls"]) if render else ""
+        content = "\n".join(part for part in (content, native) if part)
     reasoning = message.get("reasoning_content") or message.get("reasoning")
     if not reasoning and isinstance(content_value, list):
         # Resolved defensively so an older engine_stream overlay keeps working.

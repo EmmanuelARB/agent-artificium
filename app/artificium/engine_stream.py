@@ -141,6 +141,7 @@ def _stream_chat_completion(
             request = urllib.request.Request(url, data=body, headers=supplied, method="POST")
             content_parts: list[str] = []
             reasoning_parts: list[str] = []
+            native_calls: dict[int, dict[str, Any]] = {}
             role: str | None = None
             finish_reason: str | None = None
             usage: dict[str, Any] | None = None
@@ -238,6 +239,21 @@ def _stream_chat_completion(
                                 if isinstance(delta.get("role"), str):
                                     role = delta["role"]
                                 piece = delta.get("content")
+                                if isinstance(delta.get("tool_calls"), list):
+                                    for position, fragment in enumerate(delta["tool_calls"]):
+                                        if not isinstance(fragment, dict):
+                                            continue
+                                        index = fragment.get("index") if isinstance(fragment.get("index"), int) else position
+                                        slot = native_calls.setdefault(index, {"function": {"name": "", "arguments": ""}})
+                                        function = fragment.get("function")
+                                        if isinstance(function, dict):
+                                            if isinstance(function.get("name"), str) and function["name"]:
+                                                slot["function"]["name"] = function["name"]
+                                            part = function.get("arguments")
+                                            if isinstance(part, dict):
+                                                part = json.dumps(part)
+                                            if isinstance(part, str):
+                                                slot["function"]["arguments"] += part
                                 if isinstance(piece, list):
                                     piece_text, piece_thinking = _split_content_chunks(piece)
                                     if piece_thinking:
@@ -284,6 +300,8 @@ def _stream_chat_completion(
             message: dict[str, Any] = {"role": role or "assistant", "content": "".join(content_parts)}
             if reasoning_parts:
                 message["reasoning_content"] = "".join(reasoning_parts)
+            if native_calls:
+                message["tool_calls"] = [native_calls[index] for index in sorted(native_calls)]
             raw: dict[str, Any] = {"choices": [{"message": message, "finish_reason": finish_reason}]}
             if usage is not None:
                 raw["usage"] = usage
@@ -323,6 +341,37 @@ def _stream_chat_completion(
             raise EngineError("Connection failed: " + _redact(str(exc), redactions), kind="network",
                               hint="Check the server address and connection.") from exc
     raise AssertionError("request attempts must be positive")
+
+
+def _render_native_tool_calls(calls: Any) -> str:
+    """Render API-level `tool_calls` as the harness's own `<tool_call>` text.
+
+    The harness sends no tool schema, but a model trained on a native format
+    can still answer with one, and the server then moves the call out of
+    `content`. The nested name/arguments form carries it unchanged; arguments
+    that are not a JSON object are passed through raw so the parser rejects
+    them with a repair notice instead of guessing.
+    """
+
+    if not isinstance(calls, list):
+        return ""
+    rendered: list[str] = []
+    for call in calls:
+        function = call.get("function") if isinstance(call, dict) else None
+        if not isinstance(function, dict) or not str(function.get("name") or "").strip():
+            continue
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments) if arguments.strip() else {}
+            except ValueError:
+                rendered.append(f"<tool_call>\n{arguments}\n</tool_call>")
+                continue
+        if not isinstance(arguments, dict):
+            arguments = {}
+        body = json.dumps({"name": str(function["name"]).strip(), "arguments": arguments}, ensure_ascii=False)
+        rendered.append(f"<tool_call>\n{body}\n</tool_call>")
+    return "\n".join(rendered)
 
 
 def _split_content_chunks(chunks: list[Any]) -> tuple[str, str]:
