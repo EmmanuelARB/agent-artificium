@@ -23,7 +23,6 @@ import datetime as dt
 import os
 import re
 import sys
-import textwrap
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -195,18 +194,35 @@ def record_passes_filters(
     return True
 
 
-def _wrap_text(text: str, width: int, max_lines: int, full: bool) -> list[str]:
+def _clip_text(text: str, width: int, max_lines: int, full: bool) -> list[str]:
+    """Split text on its own newlines and cap it at ``max_lines`` terminal rows.
+
+    Lines are not wrapped here: the viewer adds a timestamp after rendering, so
+    wrapping at the terminal width made every line overflow and the terminal
+    wrapped it again. The cap still counts the rows a line will take, and cuts
+    the line that crosses it, so one very long line cannot flood the screen.
+    """
+
     width = max(20, width)
-    paragraphs = text.splitlines() or [""]
-    lines: list[str] = []
-    for paragraph in paragraphs:
-        wrapped = textwrap.wrap(paragraph, width=width, break_long_words=True) or [""]
-        lines.extend(wrapped)
-    if not full and max_lines and max_lines > 0 and len(lines) > max_lines:
-        hidden = len(lines) - max_lines
-        lines = lines[:max_lines]
-        lines.append(f"… (+{hidden} lines)")
-    return lines
+    lines = text.splitlines() or [""]
+    if full or not max_lines or max_lines <= 0:
+        return lines
+    rows = [max(1, -(-len(line) // width)) for line in lines]
+    total = sum(rows)
+    if total <= max_lines:
+        return lines
+    kept: list[str] = []
+    used = 0
+    for line, needed in zip(lines, rows):
+        if used + needed > max_lines:
+            room = (max_lines - used) * width
+            if room > 0:
+                kept.append(line[:room].rstrip())
+            break
+        kept.append(line)
+        used += needed
+    kept.append(f"… (+{total - max_lines} lines)")
+    return kept
 
 
 def _wrap_tagged(tag: str, text: str, options: RenderOptions) -> list[str]:
@@ -214,7 +230,7 @@ def _wrap_tagged(tag: str, text: str, options: RenderOptions) -> list[str]:
     if not text:
         return [f"[{tag}] (empty)"]
     width = max(20, options.width - (len(tag) + 3))
-    lines = _wrap_text(text, width, options.max_lines, options.full)
+    lines = _clip_text(text, width, options.max_lines, options.full)
     pad = " " * (len(tag) + 3)
     return [f"[{tag}] {lines[0]}"] + [pad + line for line in lines[1:]]
 

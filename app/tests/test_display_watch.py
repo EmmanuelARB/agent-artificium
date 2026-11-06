@@ -271,12 +271,29 @@ class RenderingCase(unittest.TestCase):
         self.assertIn("rc=0", lines[0])
         self.assertIn("1.2s", lines[0])
 
-    def test_thought_wraps_and_caps_lines(self) -> None:
+    def test_long_thought_is_not_wrapped_but_is_capped_by_terminal_rows(self) -> None:
         long_thought = " ".join(f"word{i}" for i in range(200))
         options = display.RenderOptions(color=False, width=40, max_lines=3, full=False, timestamps=False)
         lines = display.render_event_body({"kind": "thought", "content": long_thought}, options)
-        self.assertLessEqual(len(lines), 4)  # 3 content lines + one "(+K lines)" marker
+        self.assertEqual(len(lines), 2)  # one cut line + the "(+K lines)" marker
+        self.assertNotIn("\n", "".join(lines))
+        self.assertLessEqual(len(lines[0]), 3 * (40 - len("think") - 3) + len("[think] "))
         self.assertTrue(lines[-1].strip().startswith("…"))
+
+    def test_text_that_fits_the_cap_is_left_alone_and_never_wrapped(self) -> None:
+        options = display.RenderOptions(color=False, width=40, max_lines=6, full=False, timestamps=False)
+        text = "a short first line\n" + "x" * 60
+        lines = display.render_event_body({"kind": "thought", "content": text}, options)
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0], "[think] a short first line")
+        self.assertTrue(lines[1].endswith("x" * 60))
+
+    def test_wide_timestamped_lines_are_not_pre_wrapped(self) -> None:
+        options = display.RenderOptions(color=False, width=40, max_lines=6, full=False, timestamps=True)
+        record = {"kind": "thought", "content": "y" * 70, "timestamp": "2026-11-05T21:00:00Z"}
+        lines = display.render_record_lines(record, options)
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].endswith("y" * 70))
 
     def test_full_flag_disables_the_cap(self) -> None:
         long_thought = " ".join(f"word{i}" for i in range(200))
@@ -284,7 +301,8 @@ class RenderingCase(unittest.TestCase):
         uncapped = display.RenderOptions(color=False, width=40, max_lines=3, full=True, timestamps=False)
         capped_lines = display.render_event_body({"kind": "thought", "content": long_thought}, capped)
         full_lines = display.render_event_body({"kind": "thought", "content": long_thought}, uncapped)
-        self.assertGreater(len(full_lines), len(capped_lines))
+        self.assertGreater(len("".join(full_lines)), len("".join(capped_lines)))
+        self.assertEqual(len(full_lines), 1)
         self.assertFalse(full_lines[-1].strip().startswith("…"))
 
     def test_provider_reasoning_hidden_unless_reasoning_flag(self) -> None:
