@@ -8,11 +8,20 @@ import gzip
 import os
 import json
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from artificium.filesystem import Paths, atomic_write_json, read_json, sha256_text
+from artificium.filesystem import (
+    Paths,
+    atomic_write_json,
+    read_json,
+    read_jsonl,
+    reverse_lines,
+    sha256_text,
+    tail_jsonl,
+)
 from artificium.records import (
     Console,
     Records,
@@ -188,6 +197,141 @@ class RecordsStorageCase(unittest.TestCase):
         shutil.rmtree(self.paths.root)
         records._flush_at_exit()
         self.assertFalse(self.paths.root.exists())
+
+
+class TailReaderCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.path = Path(self.temporary.name) / "log.jsonl"
+
+    def check(self, content: bytes) -> None:
+        self.path.write_bytes(content)
+        everything = read_jsonl(self.path)
+        for limit in (1, 2, 3, 5, 1000):
+            self.assertEqual(tail_jsonl(self.path, limit), everything[-limit:], limit)
+
+    @staticmethod
+    def line(**data) -> bytes:
+        return json.dumps(data).encode() + b"\n"
+
+    def test_missing_empty_and_single_line_files(self) -> None:
+        self.assertEqual(tail_jsonl(self.path, 5), [])
+        self.check(b"")
+        self.check(b"\n\n")
+        self.check(self.line(n=1))
+
+    def test_no_trailing_newline_and_n_larger_than_the_file(self) -> None:
+        self.check(self.line(n=1) + self.line(n=2) + b'{"n": 3}')
+
+    def test_undecodable_partial_and_non_object_lines_are_skipped(self) -> None:
+        self.check(
+            self.line(n=1) + b"not json\n" + b"[1, 2]\n" + self.line(n=2)
+            + b"\xff\xfe\n" + self.line(n=3) + b'{"n": 4, "partial'
+        )
+
+    def test_a_line_longer_than_several_read_blocks(self) -> None:
+        big = self.line(n=2, text="x" * (3 * (1 << 20) + 17))
+        self.check(self.line(n=1) + big + self.line(n=3) + big + self.line(n=4))
+
+    def test_multibyte_text_across_block_boundaries(self) -> None:
+        text = "é€😀" * (1 << 19)
+        self.check(self.line(n=1, text=text) + self.line(n=2, text=text))
+
+    def test_reverse_lines_max_bytes_drops_a_line_cut_by_the_limit(self) -> None:
+        self.path.write_bytes(b"first\nsecond\nthird\n")
+        self.assertEqual(list(reverse_lines(self.path)), [b"third", b"second", b"first"])
+        self.assertEqual(list(reverse_lines(self.path, 8)), [b"third"])
+
+    def test_work_is_bounded_by_the_tail_not_the_file(self) -> None:
+        self.path.write_bytes(b"".join(self.line(n=n, pad="p" * 200) for n in range(20_000)))
+        size = self.path.stat().st_size
+        self.assertGreater(size, 4_000_000)
+        read = {"bytes": 0}
+        real_open = Path.open
+
+        def counting_open(target, mode="r", *args, **kwargs):
+            handle = real_open(target, mode, *args, **kwargs)
+            if "b" not in mode:
+                return handle
+            inner = handle.read
+
+            def counted(*arguments):
+                data = inner(*arguments)
+                read["bytes"] += len(data)
+                return data
+
+            handle.read = counted
+            return handle
+
+        with mock.patch.object(Path, "open", counting_open):
+            tail = tail_jsonl(self.path, 5)
+        self.assertEqual([item["n"] for item in tail], list(range(19_995, 20_000)))
+        self.assertLessEqual(read["bytes"], 1 << 20)
+        self.assertGreater(read["bytes"], 0)
+
+
+class LastCheckpointCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.paths = Paths(Path(self.temporary.name))
+        self.records = Records(self.paths)
+        self.addCleanup(self.records.flush)
+
+    def last(self, records: Records | None = None) -> str:
+        from artificium.runtime import Artificium
+
+        agent = types.SimpleNamespace(records=records or self.records)
+        return Artificium._last_checkpoint(agent)
+
+    def test_none_before_any_checkpoint(self) -> None:
+        self.assertEqual(self.last(), "none")
+
+    def test_checkpoint_survives_any_number_of_later_records(self) -> None:
+        self.records.life("working_memory_offloaded", path="memory/a.txt")
+        for number in range(300):
+            self.records.life("engine_response", number=number)
+        self.assertEqual(self.last(), "memory/a.txt")
+        self.records.life("working_memory_offloaded", path="memory/b.txt")
+        self.assertEqual(self.last(), "memory/b.txt")
+
+    def test_a_new_process_sees_the_stored_checkpoint_without_reading_the_log(self) -> None:
+        self.records.life("working_memory_offloaded", path="memory/a.txt")
+        fresh = Records(self.paths)
+        self.addCleanup(fresh.flush)
+        with mock.patch("artificium.records.reverse_lines", side_effect=AssertionError):
+            self.assertEqual(self.last(fresh), "memory/a.txt")
+
+    def test_a_workspace_without_state_is_answered_from_the_log_once(self) -> None:
+        self.paths.life_loop_log.parent.mkdir(parents=True, exist_ok=True)
+
+        def append(**item) -> None:
+            with self.paths.life_loop_log.open("a") as handle:
+                handle.write(json.dumps(item) + "\n")
+
+        append(kind="context_compacted", path="memory/old.txt")
+        append(kind="working_memory_offloaded", path="memory/new.txt")
+        for number in range(300):
+            append(kind="engine_response", number=number)
+        self.assertEqual(self.last(), "memory/new.txt")
+        self.assertEqual(read_json(self.records._last_checkpoint_state)["path"], "memory/new.txt")
+        with mock.patch("artificium.records.reverse_lines", side_effect=AssertionError):
+            self.assertEqual(self.last(), "memory/new.txt")
+
+    def test_no_checkpoint_in_an_old_workspace_is_stored_too(self) -> None:
+        self.paths.life_loop_log.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.life_loop_log.write_text(json.dumps({"kind": "engine_response"}) + "\n")
+        self.assertEqual(self.last(), "none")
+        with mock.patch("artificium.records.reverse_lines", side_effect=AssertionError):
+            self.assertEqual(self.last(), "none")
+        self.records.life("working_memory_offloaded", path="memory/c.txt")
+        self.assertEqual(self.last(), "memory/c.txt")
+
+    def test_a_records_overlay_without_last_checkpoint_still_works(self) -> None:
+        self.records.life("working_memory_offloaded", path="memory/a.txt")
+        legacy = types.SimpleNamespace(recent_life=self.records.recent_life)
+        self.assertEqual(self.last(legacy), "memory/a.txt")
 
 
 if __name__ == "__main__":

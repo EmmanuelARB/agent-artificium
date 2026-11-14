@@ -21,6 +21,8 @@ from .filesystem import (
     json_dumps,
     read_json,
     read_jsonl,
+    reverse_lines,
+    tail_jsonl,
     sha256_text,
     sortable_id,
     utc_now,
@@ -294,6 +296,11 @@ class Records:
         }
         with self._lock:
             append_jsonl(self.paths.life_loop_log, record)
+            if kind in self._CHECKPOINT_KINDS and data.get("path"):
+                atomic_write_json(
+                    self._last_checkpoint_state,
+                    {"path": str(data["path"]), "updated_at": record["timestamp"]},
+                )
         return record
 
     def model_log_path(self, request_id: str) -> Path:
@@ -356,13 +363,60 @@ class Records:
         return compressed
 
     def recent_life(self, limit: int = 50) -> list[dict[str, Any]]:
-        return read_jsonl(self.paths.life_loop_log)[-max(1, limit) :]
+        return tail_jsonl(self.paths.life_loop_log, max(1, limit))
 
     def recent_operational(self, limit: int = 50) -> list[dict[str, Any]]:
-        return read_jsonl(self.paths.lifetime_log)[-max(1, limit) :]
+        return tail_jsonl(self.paths.lifetime_log, max(1, limit))
 
     def recent_feature(self, feature: str, limit: int = 50) -> list[dict[str, Any]]:
-        return read_jsonl(self.paths.feature_log(feature))[-max(1, limit) :]
+        return tail_jsonl(self.paths.feature_log(feature), max(1, limit))
+
+    # -- Last working-memory checkpoint ----------------------------------
+    #
+    # Every request's state header names the newest checkpoint. Finding it by
+    # scanning the life-loop log would cost more with every day of the
+    # instance's life (and miss it once enough records follow it), so the
+    # path is stored when the checkpoint is recorded and read back from one
+    # small file.
+
+    _CHECKPOINT_KINDS = frozenset({"working_memory_offloaded", "context_compacted"})
+
+    @property
+    def _last_checkpoint_state(self) -> Path:
+        return self.paths.runtime / "last_checkpoint.json"
+
+    def last_checkpoint(self) -> str | None:
+        """Path of the newest checkpoint record, or ``None`` if there is none.
+
+        A workspace that predates the state file is answered once from the
+        log (newest record first, stopping at the first match) and the answer
+        is stored, so later calls never touch the log again.
+        """
+
+        state = read_json(self._last_checkpoint_state, None)
+        if isinstance(state, dict) and "path" in state:
+            return str(state["path"]) if state["path"] else None
+        found = None
+        for line in reverse_lines(self.paths.life_loop_log):
+            if not any(kind.encode() in line for kind in self._CHECKPOINT_KINDS):
+                continue
+            try:
+                item = json.loads(line.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
+                continue
+            if (
+                isinstance(item, dict)
+                and item.get("kind") in self._CHECKPOINT_KINDS
+                and item.get("path")
+            ):
+                found = str(item["path"])
+                break
+        with self._lock:
+            # A checkpoint recorded while the log was being scanned wins.
+            if read_json(self._last_checkpoint_state, None) is None:
+                atomic_write_json(self._last_checkpoint_state, {"path": found})
+        return found
+
 
     def feature_usage(self) -> dict[str, Any]:
         """Feature/kind usage counters, including this instance's unflushed deltas.

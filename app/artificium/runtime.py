@@ -250,8 +250,11 @@ class Artificium:
         return str(available[-1]["id"]) if available else "none"
 
     def _last_checkpoint(self) -> str:
-        events = self.records.recent_life(200)
-        for item in reversed(events):
+        lookup = getattr(self.records, "last_checkpoint", None)
+        if lookup is not None:
+            return lookup() or "none"
+        # A records overlay written before the stored checkpoint existed.
+        for item in reversed(self.records.recent_life(200)):
             if item.get("kind") in {
                 "working_memory_offloaded",
                 "context_compacted",

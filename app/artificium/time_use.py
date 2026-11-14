@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
+
+from .filesystem import reverse_lines
 
 
 # The lifetime log of a long run reaches hundreds of megabytes; only its tail
@@ -15,24 +16,7 @@ MAX_SCAN_BYTES = 64 * 1024 * 1024
 MAX_SCAN_RECORDS = 50_000
 
 
-def _reverse_lines(path: Path, max_bytes: int) -> Iterator[bytes]:
-    with path.open("rb") as handle:
-        handle.seek(0, os.SEEK_END)
-        position = handle.tell()
-        floor = max(0, position - max_bytes)
-        remainder = b""
-        while position > floor:
-            size = min(1 << 20, position - floor)
-            position -= size
-            handle.seek(position)
-            block = handle.read(size) + remainder
-            lines = block.split(b"\n")
-            remainder = lines.pop(0)
-            for line in reversed(lines):
-                if line.strip():
-                    yield line
-        if position == 0 and remainder.strip():
-            yield remainder
+_reverse_lines = reverse_lines
 
 
 def _parse_time(value: Any) -> dt.datetime | None:

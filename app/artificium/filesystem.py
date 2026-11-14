@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -95,6 +96,69 @@ def iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
                 continue
             if isinstance(value, dict):
                 yield value
+
+
+def reverse_lines(path: Path, max_bytes: int | None = None) -> Iterator[bytes]:
+    """Yield the non-blank lines of ``path`` from the last to the first.
+
+    Reads backwards in 1 MiB blocks, so the cost of taking the last few
+    lines is the size of those lines, not of the file. ``max_bytes`` limits
+    the scan to the file's final bytes: a line that begins before that point
+    is not yielded. A missing file yields nothing.
+    """
+
+    try:
+        handle = path.open("rb")
+    except OSError:
+        return
+    with handle:
+        handle.seek(0, os.SEEK_END)
+        position = handle.tell()
+        floor = 0 if max_bytes is None else max(0, position - max_bytes)
+        # Fragments of the line still being read, nearest-to-the-end first, so
+        # a very long line is joined once instead of on every block.
+        parts: list[bytes] = []
+        while position > floor:
+            size = min(1 << 20, position - floor)
+            position -= size
+            handle.seek(position)
+            block = handle.read(size)
+            if b"\n" not in block:
+                parts.append(block)
+                continue
+            lines = (block + b"".join(reversed(parts))).split(b"\n")
+            parts = [lines.pop(0)]
+            for line in reversed(lines):
+                if line.strip():
+                    yield line
+        remainder = b"".join(reversed(parts))
+        if position == 0 and remainder.strip():
+            yield remainder
+
+
+def iter_jsonl_reverse(path: Path, max_bytes: int | None = None) -> Iterator[dict[str, Any]]:
+    """Yield the records :func:`iter_jsonl` would, newest first, lazily."""
+
+    for line in reverse_lines(path, max_bytes):
+        try:
+            value = json.loads(line.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            yield value
+
+
+def tail_jsonl(path: Path, limit: int) -> list[dict[str, Any]]:
+    """The last ``limit`` records of a JSONL file, oldest first.
+
+    Equal to ``read_jsonl(path)[-limit:]`` without parsing the whole file.
+    """
+
+    if limit <= 0:
+        return []
+    newest = list(itertools.islice(iter_jsonl_reverse(path), limit))
+    newest.reverse()
+    return newest
 
 
 def sha256_text(content: str) -> str:
