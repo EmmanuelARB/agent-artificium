@@ -110,6 +110,49 @@ class FinalReleaseCase(unittest.TestCase):
         self.assertTrue((self.paths.notifications_new/(notification.id+'.json')).exists())
         self.assertFalse(list(self.paths.notifications_delivered.glob('*.json')))
 
+    def test_413_with_images_releases_them_and_retries_once_with_sizes(self):
+        engine = ScriptedEngine(EngineError('HTTP 413: Request Entity Too Large', status=413), '<think>Recovered.</think>')
+        agent = self.agent(engine, vision='yes', vision_preference='yes')
+        agent._append_runtime(['A prior notification already stored.'], origin='test')
+        agent.visual.load([str(self.image())], retention='persistent')
+        size = len(b'offline image fixture')
+        agent.run_turn()
+        batches = [[m['content'] for m in request if m.get('_artificium',{}).get('kind')=='runtime_input'] for request in engine.requests]
+        self.assertEqual(len(engine.requests), 2)
+        for content in batches[0]:
+            self.assertEqual(batches[1].count(content), 1)
+        self.assertNotIn('artificium_image', json.dumps(engine.requests[1]))
+        notice = next(c for c in batches[1] if 'vision_fallback' in c)
+        self.assertIn('too large', notice)
+        self.assertIn(f'({size} bytes)', notice)
+        self.assertRegex(notice, r'\d+ bytes in total')
+        self.assertEqual(agent.visual.list(), [])
+        self.assertFalse(agent._request_blocked)
+        stored = [m['content'] for m in agent.working.load()]
+        self.assertEqual(stored.count(batches[0][-1]), 1)
+
+    def test_413_that_persists_without_images_does_not_retry_in_place(self):
+        engine = ScriptedEngine(EngineError('HTTP 413', status=413), EngineError('HTTP 413', status=413))
+        agent = self.agent(engine, auto_repair=False)
+        agent.visual.load([str(self.image())])
+        with self.assertRaises(EngineError):
+            agent.run_turn()
+        self.assertEqual(len(engine.requests), 2)
+        self.assertNotIn('artificium_image', json.dumps(engine.requests[1]))
+
+    def test_load_images_reports_bytes(self):
+        agent = self.agent()
+        path = self.image()
+        result = agent.tools.load_images([str(path)])
+        self.assertEqual(result['loaded'][0]['bytes'], len(b'offline image fixture'))
+        self.assertIn(f"{len(b'offline image fixture')} bytes", result['summary'])
+        self.assertEqual(agent.tools.list_loaded_images()['active_images'][0]['bytes'], len(b'offline image fixture'))
+        # A record saved before sizes were kept is measured on listing.
+        saved = read_json(self.paths.visual_context)
+        del saved['images'][0]['bytes']
+        atomic_write_json(self.paths.visual_context, saved)
+        self.assertEqual(agent.visual.list()[0]['bytes'], len(b'offline image fixture'))
+
     def test_explicit_vision_yes_keeps_existing_no_fallback_behavior(self):
         engine = ScriptedEngine(EngineError('image input is unsupported',status=415))
         agent = self.agent(engine, vision='yes', vision_preference='yes')

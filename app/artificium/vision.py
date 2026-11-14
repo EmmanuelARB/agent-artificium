@@ -32,7 +32,15 @@ class VisualContext:
         )
 
     def list(self) -> list[dict[str, Any]]:
-        return self._load()
+        # Records saved before sizes were kept get theirs from the file now.
+        images = self._load()
+        for item in images:
+            if "bytes" not in item:
+                try:
+                    item["bytes"] = Path(str(item.get("path"))).stat().st_size
+                except OSError:
+                    item["bytes"] = None
+        return images
 
     def load(
         self,
@@ -66,7 +74,8 @@ class VisualContext:
             mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
             if not mime.startswith("image/"):
                 raise ValueError(f"not a supported image attachment: {target}")
-            if target.stat().st_size > self.config.max_image_bytes:
+            size = target.stat().st_size
+            if size > self.config.max_image_bytes:
                 raise ValueError(f"image exceeds max_image_bytes: {target}")
             key = str(target)
             existing = by_path.get(key)
@@ -75,6 +84,7 @@ class VisualContext:
                     "id": sortable_id("image_"),
                     "path": key,
                     "mime": mime,
+                    "bytes": size,
                     "detail": detail,
                     "retention": retention,
                     "loaded_at": now,
@@ -86,6 +96,7 @@ class VisualContext:
                 existing.update(
                     {
                         "mime": mime,
+                        "bytes": size,
                         "detail": detail,
                         "retention": retention,
                         "loaded_at": now,
@@ -94,11 +105,13 @@ class VisualContext:
                 refreshed.append(dict(existing))
 
         self._save(active)
+        total = sum(item.get("bytes") or 0 for item in active)
         result = {
             "status": "images_loaded",
             "summary": (
                 f"{len(loaded)} image(s) loaded and {len(refreshed)} active image(s) "
-                "refreshed without duplication"
+                f"refreshed without duplication; {len(active)} active image(s) total "
+                f"{total} bytes (sent base64-encoded, about a third larger)"
             ),
             "retention": retention,
             "loaded": loaded,
