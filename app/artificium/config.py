@@ -138,6 +138,11 @@ MODEL_FIELDS = frozenset({
     *GENERATION_FIELDS,
 })
 
+# The optional "oversight" section is a complete second connection with the
+# model section's fields. It never carries tool_mode: oversight requests are
+# plain text exchanges, with no tool calling.
+OVERSIGHT_FIELDS = MODEL_FIELDS - {"tool_mode"}
+
 # Chat-completions adapters that can carry the API's own tool definitions.
 NATIVE_TOOL_ADAPTERS = frozenset({"openai_compatible", "mistral", "openrouter", "vllm", "llamacpp"})
 TOOL_MODES = ("text", "native")
@@ -289,6 +294,12 @@ class Config:
     # A different model name on the same endpoint for those fresh-context
     # checks, so they do not share the agent's blind spots; None uses the same.
     oversight_model: str | None = None
+    # A complete second connection for the checks above, request_review and
+    # consult: the "oversight" section of config.json, holding OVERSIGHT_FIELDS.
+    # None means no separate connection (oversight_model, or the worker, is
+    # used). Kept complete and normalized after validation; written to its own
+    # section, never to "harness".
+    oversight_connection: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.context_window_source not in {"manual", "detected", "default"}:
@@ -392,6 +403,11 @@ class Config:
         if self.oversight_model is not None and not (
                 isinstance(self.oversight_model, str) and self.oversight_model.strip()):
             raise ValueError("oversight_model must be a model name or null")
+        if self.oversight_connection is not None:
+            built = self._build_oversight(self.oversight_connection)
+            self.oversight_connection = {item.name: getattr(built, item.name)
+                                         for item in dataclasses.fields(built)
+                                         if item.name in OVERSIGHT_FIELDS}
         if self.engine_wait_notice_seconds <= 0:
             raise ValueError("engine_wait_notice_seconds must be positive")
         if self.engine_wait_repeat_seconds <= 0:
@@ -459,6 +475,41 @@ class Config:
         ):
             raise ValueError("stop_sequences must be a list of non-empty strings")
 
+    def _build_oversight(self, section: Any) -> "Config":
+        if not isinstance(section, dict):
+            raise ValueError("the oversight section must be an object")
+        unknown = sorted(key for key in section if key not in OVERSIGHT_FIELDS)
+        if unknown:
+            raise ValueError(
+                "oversight settings must be connection settings in the oversight section"
+                + ("; tool_mode does not apply to oversight requests" if "tool_mode" in unknown else "")
+                + f" (not allowed there: {', '.join(unknown)})")
+        # Harness settings (offloading, chunking, hours...) come from the worker.
+        # The window is the oversight model's own, so the worker's exact
+        # working-memory target, which may exceed it, is dropped.
+        values = {item.name: getattr(self, item.name) for item in dataclasses.fields(self)
+                  if item.name not in MODEL_FIELDS}
+        values.update(section)
+        values.update(tool_mode="text", oversight_connection=None, oversight_model=None,
+                      working_memory_tokens=None, mandatory_offload=False,
+                      vision_preference=None, schema_version=3)
+        try:
+            return Config(**values)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"oversight connection: {exc}") from None
+
+    def oversight_config(self) -> "Config | None":
+        """The oversight connection as a Config of its own, or None.
+
+        Everything but the connection fields (and tool_mode, which is always
+        text) is the worker's, so token budgets and logging work unchanged;
+        the context window, model, endpoint and generation settings are the
+        oversight connection's.
+        """
+        if self.oversight_connection is None:
+            return None
+        return self._build_oversight(self.oversight_connection)
+
     @property
     def working_memory_limit(self) -> int:
         """An offloading target, never an increase to the server's capacity."""
@@ -507,6 +558,7 @@ class Config:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "Config":
+        grouped = value
         if int(value.get("schema_version", 1) or 1) >= 3:
             harness, model = value.get("harness"), value.get("model")
             if "harness" in value and not (isinstance(harness, dict) and isinstance(model, dict)):
@@ -514,9 +566,13 @@ class Config:
             if isinstance(harness, dict) and isinstance(model, dict):
                 if any(key in MODEL_FIELDS or key == "schema_version" for key in harness):
                     raise ValueError("model settings must be in the model section")
+                if "oversight_connection" in harness:
+                    raise ValueError("the oversight connection belongs in the oversight section")
                 if any(key not in MODEL_FIELDS for key in model):
                     raise ValueError("harness settings must be in the harness section")
                 value = {**harness, **model, "schema_version": 3}
+                if "oversight" in grouped:
+                    value["oversight_connection"] = grouped["oversight"]
         allowed = {item.name for item in dataclasses.fields(cls)}
         supplied = {key: item for key, item in value.items() if key in allowed}
         if "auto_repair" not in supplied and "emergency_offload" in value:
@@ -541,11 +597,17 @@ class Config:
         # meaning when a later release changes a default.
         values = {item.name: getattr(self, item.name) for item in dataclasses.fields(self)}
         values.pop("schema_version", None)
-        return {
+        section = values.pop("oversight_connection", None)
+        grouped = {
             "schema_version": 3,
             "harness": {k: v for k, v in values.items() if k not in MODEL_FIELDS},
             "model": {k: v for k, v in values.items() if k in MODEL_FIELDS},
         }
+        # Present only when configured: a missing section means no separate
+        # oversight connection.
+        if section is not None:
+            grouped["oversight"] = dict(section)
+        return grouped
 
 
 class ConfigStore:
@@ -567,29 +629,69 @@ class ConfigStore:
 
 
 class SecretsStore:
+    """The worker's key at the top level of ``.secrets.json``; the oversight
+    connection's key, when it has its own, under ``"oversight"``. Files that
+    predate the oversight connection have only the first and keep working."""
+
     def __init__(self, paths: Paths):
         self.paths = paths
+
+    def _read(self) -> dict[str, Any]:
+        value = read_json(self.paths.secrets, {})
+        return value if isinstance(value, dict) else {}
 
     def save_api_key(self, api_key: str, *, provider: str | None = None,
                      base_url: str | None = None, preferred: bool = True) -> None:
         key = api_key.strip()
         if not key:
             raise ValueError("API key cannot be empty")
-        value = {"api_key": key, "preferred": preferred}
+        value: dict[str, Any] = {"api_key": key, "preferred": preferred}
         if provider:
             value["provider"] = provider.lower().strip()
         if base_url:
             value["base_url"] = base_url.rstrip("/")
+        # Replacing the worker's key must not drop the oversight connection's.
+        oversight = self._read().get("oversight")
+        if isinstance(oversight, dict):
+            value["oversight"] = oversight
         atomic_write_json(self.paths.secrets, value, mode=0o600)
 
+    def save_oversight_api_key(self, api_key: str, *, provider: str | None = None,
+                               base_url: str | None = None, preferred: bool = True) -> None:
+        key = api_key.strip()
+        if not key:
+            raise ValueError("API key cannot be empty")
+        entry: dict[str, Any] = {"api_key": key, "preferred": preferred}
+        if provider:
+            entry["provider"] = provider.lower().strip()
+        if base_url:
+            entry["base_url"] = base_url.rstrip("/")
+        value = self._read()
+        value["oversight"] = entry
+        atomic_write_json(self.paths.secrets, value, mode=0o600)
+
+    def remove_oversight_api_key(self) -> bool:
+        value = self._read()
+        if "oversight" not in value:
+            return False
+        del value["oversight"]
+        atomic_write_json(self.paths.secrets, value, mode=0o600)
+        return True
+
+    @staticmethod
+    def _matching(entry: Any, config: Config) -> str | None:
+        """The saved key, when it was entered for this provider and server."""
+        if not (isinstance(entry, dict) and isinstance(entry.get("api_key"), str)):
+            return None
+        provider = str(entry.get("provider") or "").strip().lower()
+        base = str(entry.get("base_url") or "").rstrip("/")
+        if (not provider or provider == config.provider) and (not base or base == config.base_url):
+            return entry["api_key"].strip() or None
+        return None
+
     def resolve_api_key(self, config: Config) -> str | None:
-        value = read_json(self.paths.secrets, {})
-        saved = None
-        if isinstance(value, dict) and isinstance(value.get("api_key"), str):
-            provider = str(value.get("provider") or "").strip().lower()
-            base = str(value.get("base_url") or "").rstrip("/")
-            if (not provider or provider == config.provider) and (not base or base == config.base_url):
-                saved = value["api_key"].strip() or None
+        value = self._read()
+        saved = self._matching(value, config)
         # A key explicitly entered by the operator must be the one runtime uses,
         # even when an older key remains in the shell environment. Legacy files
         # without this marker retain their original environment-first behavior.
@@ -604,6 +706,31 @@ class SecretsStore:
             if value:
                 return value.strip()
         return saved
+
+    def resolve_oversight_key(self, oversight: Config, worker: Config | None = None) -> str | None:
+        """The oversight connection's own key: saved under ``"oversight"``, or
+        in ``ARTIFICIUM_OVERSIGHT_API_KEY`` or the provider's standard
+        variable. ``ARTIFICIUM_API_KEY`` is the worker's and is not used. A
+        connection to the very server the worker uses falls back to the
+        worker's key."""
+
+        entry = self._read().get("oversight")
+        saved = self._matching(entry, oversight)
+        if saved and isinstance(entry, dict) and entry.get("preferred") is True:
+            return saved
+        variables = ["ARTIFICIUM_OVERSIGHT_API_KEY"]
+        preset = PROVIDERS.get(oversight.provider)
+        if preset:
+            variables.append(preset.key_environment)
+        for variable in variables:
+            found = os.getenv(variable)
+            if found:
+                return found.strip()
+        if saved:
+            return saved
+        if worker is not None and (worker.provider, worker.base_url) == (oversight.provider, oversight.base_url):
+            return self.resolve_api_key(worker)
+        return None
 
 
 def load_api_key_file(path_value: str | Path) -> str:

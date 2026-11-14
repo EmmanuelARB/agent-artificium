@@ -200,7 +200,9 @@ class FinalReleaseCase(unittest.TestCase):
         ConfigStore(self.paths).save(self.config)
         grouped = read_json(self.paths.config)
         written = {*grouped['harness'], *grouped['model'], 'schema_version'}
-        self.assertEqual(written, {item.name for item in dataclasses.fields(Config)})
+        # The oversight connection has a section of its own, written when set.
+        self.assertEqual(written, {item.name for item in dataclasses.fields(Config)} - {'oversight_connection'})
+        self.assertNotIn('oversight', grouped)
         self.assertIn('stop_sequences', grouped['model'])
         self.assertIn('max_life_loop_rounds', grouped['harness'])
         self.assertEqual(ConfigStore(self.paths).load(), self.config)

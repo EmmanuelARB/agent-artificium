@@ -146,6 +146,12 @@ class ToolRegistry(
             "evidence_paths": ["PATH"],
             "constraints": "REQUIREMENTS_THE_WORK_MUST_RESPECT",
         },
+        "consult": {
+            "tool": "consult",
+            "question": "QUESTION_AND_THE_OPTIONS_YOU_SEE",
+            "evidence_paths": ["PATH"],
+            "context": "BACKGROUND_THE_ADVISOR_LACKS",
+        },
         "schedule_task": {
             "tool": "schedule_task",
             "name": "TASK_NAME",
@@ -233,6 +239,11 @@ class ToolRegistry(
         self.sleep_request: SleepRequest | None = None
         # Set by the runtime to a callable(messages) -> (request_id, text).
         self.reviewer: Callable[[list[dict[str, Any]]], tuple[str, str]] | None = None
+        # The same for consult, plus what the entity asked (a string) and the
+        # Config whose context window bounds the evidence sent.
+        self.consultant: Callable[[list[dict[str, Any]]], tuple[str, str]] | None = None
+        self.entity_ask: Callable[[], str] | None = None
+        self.oversight_budget: Callable[[], Config] | None = None
         self.control_path = self.paths.runtime / "life-loop-control.json"
         self._functions: dict[str, Callable[..., dict[str, Any]]] = {
             "list_directory": self.list_directory,
@@ -273,7 +284,7 @@ class ToolRegistry(
         # that mixin written against an older release may lack them, and the
         # registry must still start.
         for name in ("record_directive", "retire_directive", "request_review",
-                     "track_artifact"):
+                     "consult", "track_artifact"):
             method = getattr(self, name, None)
             if callable(method):
                 self._functions[name] = method

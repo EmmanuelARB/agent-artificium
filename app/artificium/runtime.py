@@ -14,7 +14,7 @@ from typing import Any
 
 from . import _bootstrap
 from .artifacts import ArtifactTracker
-from .config import ConfigStore, SecretsStore
+from .config import Config, ConfigStore, SecretsStore
 from .directives import DirectiveStore
 from .oversight import Oversight
 from .engine import Engine, EngineError, EngineReply, PreparedRequest, make_engine
@@ -150,11 +150,18 @@ class Artificium:
             initialization=self.initialization,
             scheduler=self.scheduler,
         )
+        # Which connection serves the request in flight (see _complete), and
+        # the oversight engine built for it.
+        self._connection = "worker"
+        self._oversight_engine_cache: tuple[Config, str | None, Engine] | None = None
         self.tools.reviewer = self._review
+        self.tools.consultant = self._consult
         self.oversight = Oversight(
             paths, self.config, self.records, self.interactions, self.prompts,
             self._oversight_complete,
         )
+        self.tools.entity_ask = getattr(self.oversight, "_ask", None)
+        self.tools.oversight_budget = self._oversight_budget_config
         if not self.config.mandatory_offload:
             control = self._tools_control()
             if control.pop("mandatory_offload_pending", None):
@@ -672,6 +679,8 @@ class Artificium:
     ) -> tuple[str, EngineReply]:
         request_id = sortable_id("request_")
         request_log_path = self.paths.model_log / f"{request_id}.json"
+        # Which connection serves this request, so each can be priced apart.
+        connection = self._connection
         prepared = prepared or self.engine.prepare(messages)
         if count is None:
             _, count = self._measure(messages, prepared)
@@ -679,6 +688,7 @@ class Artificium:
         estimated = count.tokens
         request_parameters = prepared.safe_summary()
         request_parameters["token_count"] = {"tokens": count.tokens, "source": count.source}
+        request_parameters["connection"] = connection
         fingerprints = self._cached_fingerprints()
         pack_sha256 = hashlib.sha256(json_dumps(fingerprints).encode("utf-8")).hexdigest()
         if pack_sha256 != self.prompt_pack_sha256:
@@ -693,6 +703,7 @@ class Artificium:
         self.records.emit(
             "model_request",
             request_id=request_id,
+            connection=connection,
             estimated_tokens=estimated,
             token_count_source=count.source,
             message_count=len(messages),
@@ -703,6 +714,7 @@ class Artificium:
         self.records.life(
             "engine_request",
             request_id=request_id,
+            connection=connection,
             estimated_tokens=estimated,
             provider=self.config.provider,
             model=self.config.model,
@@ -745,6 +757,7 @@ class Artificium:
                 self.records.emit(
                     "model_waiting",
                     request_id=request_id,
+                    connection=connection,
                     elapsed_seconds=round(elapsed, 3),
                     seconds_since_stream_data=None if quiet is None else round(quiet, 3),
                     provider=self.config.provider,
@@ -753,6 +766,7 @@ class Artificium:
                 self.records.life(
                     "engine_waiting",
                     request_id=request_id,
+                    connection=connection,
                     elapsed_seconds=round(elapsed, 3),
                     seconds_since_stream_data=None if quiet is None else round(quiet, 3),
                     provider=self.config.provider,
@@ -808,12 +822,14 @@ class Artificium:
             self.records.emit(
                 "model_request_cancelled",
                 request_id=request_id,
+                connection=connection,
                 duration_seconds=round(elapsed, 3),
                 model_log_path=str(request_log_path),
             )
             self.records.life(
                 "engine_request_cancelled",
                 request_id=request_id,
+                connection=connection,
                 duration_seconds=round(elapsed, 3),
                 model_log_path=str(request_log_path),
             )
@@ -835,6 +851,7 @@ class Artificium:
             self.records.emit(
                 "model_request_failed",
                 request_id=request_id,
+                connection=connection,
                 duration_seconds=round(elapsed, 3),
                 error=f"{type(exc).__name__}: {exc}",
                 model_log_path=str(request_log_path),
@@ -842,6 +859,7 @@ class Artificium:
             self.records.life(
                 "engine_request_failed",
                 request_id=request_id,
+                connection=connection,
                 duration_seconds=round(elapsed, 3),
                 error=f"{type(exc).__name__}: {exc}",
                 hint=exc.hint,
@@ -892,14 +910,18 @@ class Artificium:
         usage_normalized = normalize_usage(reply.usage, reply.raw)
         # (B3) Feed this request's real/estimate pair back into the persisted
         # calibration ratio so the next estimate-sourced count benefits.
-        update_calibration(
-            self.paths, provider=self.config.provider, model=self.config.model,
-            real_tokens=usage_normalized.get("input_tokens"),
-            raw_estimate=self.estimator.messages(messages),
-        )
+        # The ratio is persisted for one provider/model: a fresh-context
+        # oversight request says nothing about the worker's and would reset it.
+        if connection == "worker":
+            update_calibration(
+                self.paths, provider=self.config.provider, model=self.config.model,
+                real_tokens=usage_normalized.get("input_tokens"),
+                raw_estimate=self.estimator.messages(messages),
+            )
         self.records.emit(
             "model_response",
             request_id=request_id,
+            connection=connection,
             content=reply.content,
             usage=reply.usage,
             usage_normalized=usage_normalized,
@@ -913,6 +935,7 @@ class Artificium:
         self.records.life(
             "engine_response",
             request_id=request_id,
+            connection=connection,
             duration_seconds=round(elapsed, 3),
             usage=reply.usage,
             usage_normalized=usage_normalized,
@@ -935,28 +958,74 @@ class Artificium:
         It goes through _complete like any inference, so it is budgeted,
         logged, and counted, but it shares none of the working memory.
         """
-        request_id, reply = self._complete(messages, wake_reason="review")
-        return request_id, reply.content
+        return self._oversight_complete(messages, wake_reason="review")
 
-    def _oversight_complete(self, messages: list[dict[str, Any]]) -> tuple[str, str]:
-        """A fresh-context request for the harness's own checks.
+    def _consult(self, messages: list[dict[str, Any]]) -> tuple[str, str]:
+        """One fresh-context request for the consult tool."""
+        return self._oversight_complete(messages, wake_reason="consult")
 
-        With ``oversight_model`` set it goes to that model on the same
-        endpoint. Oversight runs on the life-loop thread between turns, so
-        the engine can be swapped for the one request.
+    def _oversight_budget_config(self) -> Config:
+        """The config whose context window bounds what is sent to oversight."""
+        target = self._oversight_target()
+        return target[0] if target is not None else self.config
+
+    def _oversight_target(self) -> tuple[Config, str | None] | None:
+        """The connection oversight requests use, when it is not the worker's.
+
+        The "oversight" section wins; without one, ``oversight_model`` names
+        another model on the worker's endpoint and key, as it always did.
+        """
+        build = getattr(self.config, "oversight_config", None)
+        separate = build() if callable(build) else None
+        if separate is not None:
+            resolve = getattr(self.secrets, "resolve_oversight_key", None)
+            key = resolve(separate, self.config) if callable(resolve) else self.api_key
+            return separate, key
+        model = self.config.oversight_model
+        if model and model != self.config.model:
+            return dataclasses.replace(self.config, model=model), self.api_key
+        return None
+
+    def _oversight_engine(self, config: Config, key: str | None) -> Engine:
+        """Built once; rebuilt when the connection or its key changes."""
+        cached = self._oversight_engine_cache
+        if cached is not None and cached[0] == config and cached[1] == key:
+            return cached[2]
+        engine = make_engine(config, key)
+        self._oversight_engine_cache = (config, key, engine)
+        return engine
+
+    def _oversight_complete(
+        self, messages: list[dict[str, Any]], *, wake_reason: str = "oversight",
+    ) -> tuple[str, str]:
+        """A fresh-context request for the harness's own checks, request_review
+        and consult.
+
+        It goes to the oversight connection when one is configured (or to
+        ``oversight_model`` on the worker's endpoint), never silently to the
+        worker in its place: a failure is recorded and raised for the caller to
+        handle. These run on the life-loop thread, so the engine and config can
+        be swapped for the one request.
         """
 
-        model = self.config.oversight_model
-        if not model or model == self.config.model:
-            request_id, reply = self._complete(messages, wake_reason="oversight")
+        target = self._oversight_target()
+        if target is None:
+            request_id, reply = self._complete(messages, wake_reason=wake_reason)
             return request_id, reply.content
-        engine, config = self.engine, self.config
-        self.config = dataclasses.replace(config, model=model)
-        self.engine = make_engine(self.config, self.api_key)
+        config, key = target
+        engine, previous, label = self.engine, self.config, self._connection
         try:
-            request_id, reply = self._complete(messages, wake_reason="oversight")
+            self.engine = self._oversight_engine(config, key)
+            self.config, self._connection = config, "oversight"
+            request_id, reply = self._complete(messages, wake_reason=wake_reason)
+        except Exception as exc:
+            self.records.emit(
+                "oversight_connection_failed", connection="oversight",
+                wake_reason=wake_reason, provider=config.provider, model=config.model,
+                error=f"{type(exc).__name__}: {exc}")
+            raise
         finally:
-            self.engine, self.config = engine, config
+            self.engine, self.config, self._connection = engine, previous, label
         return request_id, reply.content
 
     def _append_runtime(self, records: list[str], *, origin: str) -> None:
@@ -2206,6 +2275,14 @@ class Artificium:
             },
         )
 
+    def _oversight_summary(self) -> dict[str, Any] | None:
+        target = self._oversight_target()
+        if target is None:
+            return None
+        config, _ = target
+        return {"provider": config.provider, "model": config.model,
+                "context_window_tokens": config.context_window_tokens}
+
     def status(self) -> dict[str, Any]:
         overhead = self._prompt_overhead()
         visual_message = self.visual.request_message()
@@ -2253,6 +2330,7 @@ class Artificium:
             "active_images": self.visual.list(),
             "context_window_tokens": self.config.context_window_tokens,
             "working_memory_tokens": self.config.working_memory_limit,
+            "oversight_connection": self._oversight_summary(),
             "auto_repair": self.config.auto_repair,
             "meta_memory_tokens": meta_metrics["tokens"],
             "meta_memory_words": meta_metrics["words"],

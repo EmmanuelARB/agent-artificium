@@ -217,6 +217,18 @@ memory. The reviewer looks for the strongest reasons the claim could be false.
 Use it before building on a diagnosis or calling a result verified. It costs one
 inference, and its verdict is evidence to weigh, not authority.
 
+### `consult`
+
+```json
+{"tool":"consult","question":"QUESTION AND THE OPTIONS YOU SEE","evidence_paths":["PATH"],"context":"BACKGROUND THE ADVISOR LACKS"}
+```
+
+Asks the oversight model, usually stronger and costlier than you, a major
+question in a fresh context: a plan, a change of strategy, a hard decision, or a diagnosis
+you are stuck on. It sees what the entity asked, your context and the evidence
+files, not your working memory. Use it for major decisions, not routine steps;
+its answer is advice to weigh.
+
 ### `revise_self`
 
 ```json
