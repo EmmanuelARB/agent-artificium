@@ -77,7 +77,7 @@ class SetupOptions:
     # True for a streaming-capable adapter; reconfiguring an existing
     # workspace keeps whatever was already saved.
     stream_responses: bool | None = None
-    # None leaves the saved mode alone; a fresh Mistral setup defaults to native.
+    # None leaves the saved mode alone; a fresh Mistral or OpenCode Go setup defaults to native.
     tool_mode: str | None = None
     reasoning: str | None = None
     reasoning_effort: str | None = None
@@ -272,6 +272,7 @@ PROVIDER_ORDER = (
     ("openrouter", "OpenRouter"),
     ("openai", "OpenAI"),
     ("mistral", "Mistral"),
+    ("opencode-go", "OpenCode Go"),
     ("ollama", "Ollama (local or remote)"),
     ("vllm", "vLLM (local or remote)"),
     ("llamacpp", "llama.cpp / llama-server (local or remote)"),
@@ -356,7 +357,7 @@ def _url_parts(value: str):
 def normalize_provider_endpoint(value: str, *, provider: str) -> tuple[str, str, str]:
     """Normalize one pasted server URL into its provider-native request route."""
 
-    if provider in {"openai", "openrouter", "anthropic", "gemini"}:
+    if provider in {"openai", "openrouter", "anthropic", "gemini", "opencode-go"}:
         preset = PROVIDERS[provider]
         parsed = _url_parts(value)
         path = parsed.path.rstrip("/")
@@ -981,7 +982,7 @@ class SetupWizard:
             values["stream_responses"] = options.stream_responses
         if options.tool_mode is not None:
             values["tool_mode"] = options.tool_mode
-        elif current is None and provider == "mistral":
+        elif current is None and provider in {"mistral", "opencode-go"}:
             values["tool_mode"] = "native"
         elif current is not None and getattr(current, "tool_mode", "text") == "native" and adapter not in NATIVE_TOOL_ADAPTERS:
             values["tool_mode"] = "text"

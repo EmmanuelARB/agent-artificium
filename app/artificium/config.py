@@ -70,6 +70,15 @@ PROVIDERS: dict[str, ProviderPreset] = {
         "mistral",
         "MISTRAL_API_KEY",
     ),
+    # OpenCode Go's gateway serves every model through Chat Completions; its
+    # usage terms (own User-Agent, a session header) are met by its adapter.
+    "opencode-go": ProviderPreset(
+        "opencode-go",
+        "https://opencode.ai/inference/go/openai/v1",
+        "chat/completions",
+        "opencode_go",
+        "OPENCODE_API_KEY",
+    ),
     "vllm": ProviderPreset(
         "vllm",
         "http://127.0.0.1:8000/v1",
@@ -93,7 +102,7 @@ def requires_api_key(provider: str, adapter: str = "openai_compatible") -> bool:
     preset = PROVIDERS.get(provider.lower().strip())
     if preset is not None:
         return preset.requires_api_key
-    return adapter in {"anthropic", "gemini", "mistral", "openai_responses", "openrouter"}
+    return adapter in {"anthropic", "gemini", "mistral", "opencode_go", "openai_responses", "openrouter"}
 
 
 REASONING_EFFORTS = ("none", "on", "minimal", "low", "medium", "high", "xhigh", "max")
@@ -145,7 +154,8 @@ MODEL_FIELDS = frozenset({
 OVERSIGHT_FIELDS = MODEL_FIELDS - {"tool_mode"}
 
 # Chat-completions adapters that can carry the API's own tool definitions.
-NATIVE_TOOL_ADAPTERS = frozenset({"openai_compatible", "mistral", "openrouter", "vllm", "llamacpp"})
+NATIVE_TOOL_ADAPTERS = frozenset({
+    "openai_compatible", "mistral", "openrouter", "opencode_go", "vllm", "llamacpp"})
 TOOL_MODES = ("text", "native")
 
 
@@ -353,6 +363,7 @@ class Config:
             "ollama",
             "vllm",
             "mistral",
+            "opencode_go",
             "custom_json",
         }
         if self.adapter not in adapters:

@@ -7,6 +7,7 @@ from typing import Any
 
 from .config import Config
 from .engine_native import native_messages, tools_from_messages
+from .session import SESSION_HEADER, new_session_id
 from .engine import (
     Engine,
     EngineError,
@@ -459,6 +460,69 @@ class MistralEngine(JSONEngine):
             headers={"Authorization": f"Bearer {self.api_key}"} if self.api_key else {},
             payload=payload,
         )
+
+    def parse(self, raw: dict[str, Any]) -> EngineReply:
+        return _chat_response(raw)
+
+
+class OpenCodeGoEngine(JSONEngine):
+    """OpenCode Go: one Chat Completions gateway for every model it serves.
+
+    The gateway's usage terms are met here, for every request this engine
+    sends (worker and oversight alike): the transports send Artificium's own
+    product User-Agent, and each request carries a session ID in
+    ``x-opencode-session`` for routing and prompt caching. The runtime sets
+    ``session_id`` to the conversation a request belongs to (see session.py);
+    an engine used on its own (a connection check, the emergency summary) keeps
+    one ID of its own, so it is a single conversation and never reuses another's.
+    """
+
+    # Set by the runtime before each request; None means "this engine's own".
+    session_id: str | None = None
+    _own_session_id: str | None = None
+
+    def prepare(self, messages: list[dict[str, Any]]) -> PreparedRequest:
+        if self.config.reasoning_effort == "on":
+            raise EngineError("This API defines effort levels, not a universal reasoning-on switch. Choose server default or a documented effort.", kind="settings")
+        _reject(self.config, "OpenCode Go", "reasoning_budget_tokens", "reasoning_mode")
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": _chat_messages(self.config, messages),
+            **_stream_flag(self.config),
+            **_chat_common(self.config),
+        }
+        if self.config.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.config.reasoning_effort
+        cache_key = _prompt_cache_key_value(self.config)
+        if cache_key:
+            payload["prompt_cache_key"] = cache_key
+        _native_tools(self.config, messages, payload)
+        _merge_options(payload, self.config.request_options)
+        if self.session_id is None and self._own_session_id is None:
+            self._own_session_id = new_session_id()
+        headers = {SESSION_HEADER: self.session_id or self._own_session_id or ""}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return PreparedRequest(
+            adapter="opencode_go",
+            url=f"{self.config.base_url}/{self.config.endpoint}",
+            headers=headers,
+            payload=payload,
+            guarantee="OpenCode Go gateway, Chat Completions; free-tier models are refused outside OpenCode",
+        )
+
+    def _post(self, prepared: PreparedRequest) -> dict[str, Any]:
+        try:
+            return super()._post(prepared)
+        except EngineError as exc:
+            if exc.status != 403:
+                raise
+            # Free-tier models answer 403 to any client but OpenCode itself.
+            hint = ("OpenCode Go refused the request. If the model is a free-tier model, choose a "
+                    "paid OpenCode Go model (python3 artificium.py configure model); otherwise "
+                    "check that the key has an active Go plan and that no custom header replaces "
+                    "Artificium's User-Agent or the session header.")
+            raise EngineError(f"{exc} {hint}", status=403, kind="permission", hint=hint) from exc
 
     def parse(self, raw: dict[str, Any]) -> EngineReply:
         return _chat_response(raw)

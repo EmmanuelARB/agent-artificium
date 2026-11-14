@@ -659,6 +659,10 @@ from .engine_adapters import (  # noqa: E402
     OpenRouterEngine,
     VLLMEngine,
 )
+try:  # an older engine_adapters overlay does not define it
+    from .engine_adapters import OpenCodeGoEngine
+except ImportError:  # pragma: no cover - exercised by overlay compatibility only
+    OpenCodeGoEngine = None  # type: ignore[assignment,misc]
 from .engine_providers import (  # noqa: E402
     AnthropicEngine,
     GeminiEngine,
@@ -676,6 +680,7 @@ def make_engine(config: Config, api_key: str | None) -> Engine:
         "openrouter": OpenRouterEngine,
         "vllm": VLLMEngine,
         "mistral": MistralEngine,
+        **({"opencode_go": OpenCodeGoEngine} if OpenCodeGoEngine is not None else {}),
         "ollama": OllamaEngine,
         "openai_responses": OpenAIResponsesEngine,
         "gemini": GeminiEngine,

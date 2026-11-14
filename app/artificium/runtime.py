@@ -16,6 +16,7 @@ from typing import Any
 from . import _bootstrap
 from .artifacts import ArtifactTracker
 from .config import Config, ConfigStore, SecretsStore
+from . import cost as _cost_module
 from .cost import (PRICE_FIELDS, CostLedger, CostLimitReached, cost_limit_problem,
                    has_prices, header_line, money, price_usage, WARN_FRACTION)
 from .directives import DirectiveStore
@@ -42,6 +43,7 @@ from .tool_schemas import native_tool_schemas
 from .memory import InfiniteAttention, LongTermMemory, TokenEstimator, WorkingMemory
 from .prompts import PromptPack
 from .records import Console, Records
+from .session import LifeLoopSession, new_session_id
 from .usage import format_throughput, normalize_usage, throughput_stats
 from .recovery import MAX_RECOVERY_ATTEMPTS, repairable, summarize
 from .tool_loader import load_mind_tool
@@ -159,6 +161,11 @@ class Artificium:
         # the oversight engine built for it.
         self._connection = "worker"
         self._oversight_engine_cache: tuple[Config, str | None, Engine] | None = None
+        # The conversation identity some providers ask for (see session.py): the
+        # life-loop's working context has one persisted ID; a fresh-context request
+        # sets _fresh_session for its own duration.
+        self._life_session = LifeLoopSession(self.paths.runtime / "life-loop-session.json")
+        self._fresh_session: str | None = None
         self.tools.reviewer = self._review
         self.tools.consultant = self._consult
         self.oversight = Oversight(
@@ -634,6 +641,18 @@ class Artificium:
     def _calibration_state(self):
         return load_calibration(self.paths, self.config.provider, self.config.model)
 
+    def _prepare(self, messages: list[dict[str, Any]]) -> PreparedRequest:
+        """Build a request after telling the engine which conversation it is in.
+
+        Only an engine that sends a session ID (it has a ``session_id``) cares;
+        the life-loop's working context is one conversation, renewed when that
+        context is replaced, and a fresh-context request is its own.
+        """
+        if hasattr(self.engine, "session_id"):
+            self.engine.session_id = (self._fresh_session
+                                      or self._life_session.current(self.working.load()))
+        return self.engine.prepare(messages)
+
     def _measure(
         self, messages: list[dict[str, Any]], prepared: PreparedRequest | None = None,
     ) -> tuple[PreparedRequest, TokenCount]:
@@ -641,7 +660,7 @@ class Artificium:
         calibrated estimate is clearly safe, skipping the provider preflight
         count entirely (B11).
         """
-        prepared = prepared or self.engine.prepare(messages)
+        prepared = prepared or self._prepare(messages)
         calibration = self._calibration_state()
         if calibration.samples > 0:
             raw = TokenCount(self.estimator.messages(messages), "estimate")
@@ -707,7 +726,7 @@ class Artificium:
         request_log_path = self.paths.model_log / f"{request_id}.json"
         # Which connection serves this request, so each can be priced apart.
         connection = self._connection
-        prepared = prepared or self.engine.prepare(messages)
+        prepared = prepared or self._prepare(messages)
         if count is None:
             _, count = self._measure(messages, prepared)
         check_input(self.config, count)
@@ -943,6 +962,7 @@ class Artificium:
         usage_normalized = normalize_usage(reply.usage, reply.raw)
         priced = self._account_usage(connection, reply.usage, reply.raw) or {
             "cost": None, "cost_source": "unknown", "cost_currency": self.config.price_currency}
+        plan_usage = priced.get("plan_usage") or {}
         # (B3) Feed this request's real/estimate pair back into the persisted
         # calibration ratio so the next estimate-sourced count benefits.
         # The ratio is persisted for one provider/model: a fresh-context
@@ -963,6 +983,7 @@ class Artificium:
             cost=priced["cost"],
             cost_source=priced["cost_source"],
             cost_currency=priced["cost_currency"],
+            **plan_usage,
             finish_reason=reply.finish_reason,
             duration_seconds=round(elapsed, 3),
             throughput=throughput,
@@ -1008,12 +1029,16 @@ class Artificium:
         normalized = normalize_usage(raw_usage, raw)
         cost, source = price_usage(self.config, raw_usage, normalized)
         currency = getattr(self.config, "price_currency", "USD")
+        # Resolved defensively: an older cost overlay does not know plan usage.
+        read_plan = getattr(_cost_module, "reported_plan_usage", None)
+        plan_usage = read_plan(self.config, raw_usage) if read_plan else {}
         try:
-            self.cost.record(connection, normalized, cost, currency=currency)
+            self.cost.record(connection, normalized, cost, currency=currency,
+                             **({"plan_usage": plan_usage} if plan_usage else {}))
         except Exception as exc:
             self.records.emit("cost_ledger_failed", error=f"{type(exc).__name__}: {exc}")
         return {"usage_normalized": normalized, "cost": cost, "cost_source": source,
-                "cost_currency": currency}
+                "cost_currency": currency, "plan_usage": plan_usage}
 
     def _cost_limit_gate(self) -> None:
         status = self.cost.status()
@@ -1114,6 +1139,16 @@ class Artificium:
         return engine
 
     def _oversight_complete(
+        self, messages: list[dict[str, Any]], *, wake_reason: str = "oversight",
+    ) -> tuple[str, str]:
+        """Each fresh-context request is a conversation of its own (session.py)."""
+        self._fresh_session = new_session_id()
+        try:
+            return self._oversight_request(messages, wake_reason=wake_reason)
+        finally:
+            self._fresh_session = None
+
+    def _oversight_request(
         self, messages: list[dict[str, Any]], *, wake_reason: str = "oversight",
     ) -> tuple[str, str]:
         """A fresh-context request for the harness's own checks, request_review

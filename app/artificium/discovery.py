@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from .engine import EngineError, request_json
+from .session import SESSION_HEADER, new_session_id
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,10 @@ def api_headers(provider: str, api_key: str | None,
     result: dict[str, str] = {}
     if provider == "anthropic":
         result["anthropic-version"] = "2023-06-01"
+    if provider == "opencode-go":
+        # A model list is not a conversation, but every request to this
+        # gateway names one; this lookup is its own.
+        result[SESSION_HEADER] = new_session_id()
     if api_key:
         name = {"anthropic": "x-api-key", "gemini": "x-goog-api-key"}.get(provider, "Authorization")
         result[name] = api_key if name != "Authorization" else f"Bearer {api_key}"
@@ -97,6 +102,24 @@ def _openai_base_root(base_url: str) -> str:
     return value[:-3].rstrip("/") if value.endswith("/v1") else value
 
 
+def models_endpoint(provider: str, base_url: str) -> str:
+    """Where a provider lists its models, derived from the configured base URL.
+
+    OpenCode Go serves its chat route under ``.../openai/v1`` but lists models
+    at ``.../v1/models``, so the API-flavour segment is dropped from the base
+    it was configured with (a changed host or path prefix still works).
+    """
+    base = base_url.rstrip("/")
+    if provider == "opencode-go":
+        for flavour in ("/openai/v1", "/openai"):
+            if base.endswith(flavour):
+                base = base[: -len(flavour)]
+                break
+        if not base.endswith("/v1"):
+            base += "/v1"
+    return f"{base}/models"
+
+
 def discover_models(base_url: str, *, api_key: str | None = None,
                     timeout: float = 10, headers: dict[str, str] | None = None) -> ModelDiscovery:
     return discover_provider_models("custom", base_url, api_key=api_key, timeout=timeout, headers=headers)
@@ -106,7 +129,7 @@ def discover_provider_models(provider: str, base_url: str, *, api_key: str | Non
                              timeout: float = 10, headers: dict[str, str] | None = None) -> ModelDiscovery:
     if provider == "ollama":
         return discover_ollama_models(base_url, api_key=api_key, timeout=timeout, headers=headers)
-    endpoint = f"{base_url.rstrip('/')}/models"
+    endpoint = models_endpoint(provider, base_url)
     auth = api_headers(provider, api_key, headers)
     details: dict[str, dict[str, Any]] = {}
     query: dict[str, Any] = {}

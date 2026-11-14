@@ -21,7 +21,13 @@ from .filesystem import Paths, atomic_write_json, read_json
 # usage.normalize_usage) and are billed at the output price.
 PRICE_FIELDS = ("price_input", "price_cached_input", "price_cache_write", "price_output")
 # Adapters whose responses carry the cost the provider charged (usage.cost).
-REPORTS_COST_ADAPTERS = frozenset({"openrouter"})
+REPORTS_COST_ADAPTERS = frozenset({"openrouter", "opencode_go"})
+# Adapters whose responses also say how much of a plan's allowance a request
+# used (usage.opencode.allowance, in dollars of the plan's monthly limit) and
+# what it would cost at list price. The daily limit never counts these: it
+# counts dollars actually charged (usage.cost, 0 within a plan's limits).
+PLAN_USAGE_FIELDS = ("allowance", "list_cost")
+REPORTS_PLAN_USAGE_ADAPTERS = frozenset({"opencode_go"})
 # The share of the daily limit at which the agent is told once per day.
 WARN_FRACTION = 0.8
 # Days of ledger kept; older days are dropped on write.
@@ -178,6 +184,29 @@ def reported_cost(config: Any, usage: dict[str, Any] | None) -> float | None:
     return float(value)
 
 
+def reported_plan_usage(config: Any, usage: dict[str, Any] | None) -> dict[str, Any]:
+    """Plan allowance and list-price cost of one response, when it reports them.
+
+    Read generically from ``usage.opencode``: only finite non-negative numbers
+    are kept (``allowance``, ``list_cost``), plus the ``billing_source`` label.
+    Nothing is assumed about the plan's limits; the figures are shown as given.
+    """
+    if getattr(config, "adapter", None) not in REPORTS_PLAN_USAGE_ADAPTERS \
+            or not isinstance(usage, dict) or not isinstance(usage.get("opencode"), dict):
+        return {}
+    detail = usage["opencode"]
+    found: dict[str, Any] = {}
+    for name in PLAN_USAGE_FIELDS:
+        value = detail.get(name)
+        if not isinstance(value, bool) and isinstance(value, (int, float)) \
+                and math.isfinite(value) and value >= 0:
+            found[name] = float(value)
+    source = detail.get("billing_source")
+    if found and isinstance(source, str) and source.strip():
+        found["billing_source"] = source.strip()[:40]
+    return found
+
+
 def price_usage(config: Any, raw_usage: dict[str, Any] | None,
                 normalized: dict[str, Any]) -> tuple[float | None, str]:
     """(cost, source) with source ``reported``, ``computed`` or ``unknown``."""
@@ -260,8 +289,12 @@ class CostLedger:
         return value
 
     def record(self, connection: str, normalized: dict[str, Any], cost: float | None,
-               *, currency: str = "USD") -> None:
-        """Add one billed request to today's totals."""
+               *, currency: str = "USD", plan_usage: dict[str, Any] | None = None) -> None:
+        """Add one billed request to today's totals.
+
+        ``plan_usage`` (see :func:`reported_plan_usage`) adds the allowance and
+        list-price sums, kept per connection and day beside the charged cost.
+        """
         data = self._load()
         key = self.day.key(self.clock())
         entry = data["days"].setdefault(key, {"connections": {}, "warned": False})
@@ -274,6 +307,11 @@ class CostLedger:
             total["unknown_cost_requests"] = int(total.get("unknown_cost_requests", 0)) + 1
         else:
             total["cost"] = round(float(total.get("cost", 0.0)) + cost, 8)
+        for name in PLAN_USAGE_FIELDS:
+            if plan_usage and name in plan_usage:
+                total[name] = round(float(total.get(name, 0.0)) + plan_usage[name], 8)
+        if plan_usage:
+            total["plan_usage_requests"] = int(total.get("plan_usage_requests", 0)) + 1
         for old in sorted(data["days"])[:-KEEP_DAYS]:
             del data["days"][old]
         atomic_write_json(self.path, data)
@@ -353,6 +391,17 @@ def header_line(config: Any, status: dict[str, Any], priced: bool) -> str:
     return text
 
 
+def _plan_usage_text(item: dict[str, Any]) -> str:
+    if not int(item.get("plan_usage_requests", 0) or 0):
+        return ""
+    parts = []
+    if "allowance" in item:
+        parts.append(f"plan allowance used {float(item['allowance']):.4f}")
+    if "list_cost" in item:
+        parts.append(f"{float(item['list_cost']):.4f} at list price")
+    return "; " + ", ".join(parts) if parts else ""
+
+
 def format_report(report: dict[str, Any]) -> str:
     today = report["today"]
     currency = today["currency"]
@@ -381,9 +430,15 @@ def format_report(report: dict[str, Any]) -> str:
                 f"{int(item.get('output_tokens', 0)):,} out "
                 f"({int(item.get('reasoning_tokens', 0)):,} reasoning); "
                 f"{money(float(item.get('cost', 0.0)))} {item.get('currency', currency)}"
-                + (f"; {unknown} requests of unknown cost" if unknown else ""))
+                + (f"; {unknown} requests of unknown cost" if unknown else "")
+                + _plan_usage_text(item))
     if not report["days"]:
         lines.append("No model requests recorded yet.")
+    if any(isinstance(item, dict) and item.get("plan_usage_requests")
+           for entry in report["days"] for item in entry["connections"].values()):
+        lines.append("Plan allowance is in dollars of the plan's monthly limit; within the plan's "
+                     "limits the charged cost is 0 and the allowance is the figure to watch. "
+                     "The daily cost limit counts charged cost only.")
     lines.append("Computed costs are estimates from the configured prices; "
                  "a cost the provider reports replaces the estimate.")
     return "\n".join(lines)
