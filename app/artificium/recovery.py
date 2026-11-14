@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import replace
-from typing import Any
+from typing import Any, Callable
 
 from .config import Config
 from .context_budget import TokenCount, available_output, check_input, context_exhausted, measure
@@ -55,7 +55,7 @@ def source_excerpt(history: list[dict[str, Any]], byte_limit: int) -> tuple[str,
 
 def summarize(*, config: Config, api_key: str | None, history: list[dict[str, Any]],
               original_log: str, attempt: int, prompts: PromptPack,
-              records: Records) -> tuple[str, bool]:
+              records: Records, observe: Callable[[Any], None] | None = None) -> tuple[str, bool]:
     helper = helper_config(config)
     engine = make_engine(helper, api_key)
     engine.request_attempts = 1
@@ -102,6 +102,8 @@ def summarize(*, config: Config, api_key: str | None, history: list[dict[str, An
         parameters["token_count"] = {"tokens": count.tokens, "source": count.source}
         parameters["repair_attempt"] = attempt
         reply = engine.complete_prepared(prepared)
+        if observe is not None:
+            observe(reply)  # a reply that cost money is counted even if unusable
         records.model_exchange(request_id=request_id, messages=messages,
                                request_parameters=parameters, response=vars(reply))
         if reply.finish_reason in {"length", "incomplete", "max_tokens", "MAX_TOKENS"} or len(reply.content.strip()) < 40:

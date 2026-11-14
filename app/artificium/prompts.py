@@ -12,6 +12,10 @@ from .filesystem import Paths
 
 PLACEHOLDER = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
 
+# Placeholders a newer template added that an older caller (a workspace
+# overlay of the runtime) does not supply: they render as nothing.
+OPTIONAL_VALUES: dict[str, str] = {"cost_line": ""}
+
 
 def _display(value: Any) -> str:
     if value is None:
@@ -80,7 +84,7 @@ class PromptPack:
             raise FileNotFoundError("Prompt manifest references missing files: " + ", ".join(missing))
 
     def render_text(self, text: str, values: dict[str, Any] | None = None) -> str:
-        supplied = values or {}
+        supplied = {**OPTIONAL_VALUES, **(values or {})}
         missing = sorted({name for name in PLACEHOLDER.findall(text) if name not in supplied})
         if missing:
             raise KeyError("Missing prompt values: " + ", ".join(missing))

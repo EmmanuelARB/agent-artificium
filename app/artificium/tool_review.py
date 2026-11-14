@@ -52,6 +52,12 @@ class ReviewToolsMixin:
 
     @staticmethod
     def _oversight_unavailable(tool: str, exc: Exception) -> dict[str, Any]:
+        if getattr(exc, "cost_limited", False):
+            return {
+                "status": "error",
+                "summary": f"{tool} was not sent: {exc} Continue the work without it, "
+                "and ask again after the reset only if it still matters.",
+            }
         hint = getattr(exc, "hint", None)
         return {
             "status": "error",

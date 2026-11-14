@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import difflib
 import hashlib
+import inspect
 import json
 import os
 import shutil
@@ -15,6 +16,8 @@ from typing import Any
 from . import _bootstrap
 from .artifacts import ArtifactTracker
 from .config import Config, ConfigStore, SecretsStore
+from .cost import (PRICE_FIELDS, CostLedger, CostLimitReached, cost_limit_problem,
+                   has_prices, header_line, money, price_usage, WARN_FRACTION)
 from .directives import DirectiveStore
 from .oversight import Oversight
 from .engine import Engine, EngineError, EngineReply, PreparedRequest, make_engine
@@ -113,6 +116,8 @@ class Artificium:
         self.engine = engine or make_engine(self.config, self.api_key)
         self.console = console or Console()
         self.records = Records(paths)
+        # Today's spend per connection and the daily limit; see cost.py.
+        self.cost = CostLedger(paths, self.config)
         self.prompt_fingerprints = self.prompts.fingerprints()
         self.prompt_pack_sha256 = hashlib.sha256(
             json_dumps(self.prompt_fingerprints).encode("utf-8")
@@ -179,6 +184,11 @@ class Artificium:
         # prompt caching survives ordinary Self/meta-memory edits.
         if getattr(self.config, "pinned_mind_snapshot", True):
             self._refresh_pinned_mind_snapshot(reason="process_start")
+        problem = cost_limit_problem(self.config)
+        if problem:
+            # A hand-edited file: configure refuses to save such a limit.
+            self.records.emit("cost_limit_unenforceable", reason=problem)
+            self.console.error(f"daily cost limit cannot be enforced: {problem}")
         # A start that reaches this point has imported and wired the whole
         # harness, overlay included, so the failed-start counter can reset.
         _bootstrap.clear_attempts(self.paths.root)
@@ -518,6 +528,7 @@ class Artificium:
             context_percent=f"{percent:.1f}",
             tokens_since_last_notice=max(0, context_tokens - prior),
             context_status=status,
+            cost_line=self._cost_header_line(),
             current_interaction_or_none=interaction_focus,
             pending_event_count=len(pending),
             active_stream_or_none=self._active_stream(),
@@ -541,6 +552,18 @@ class Artificium:
                 or "none"
             ),
         )
+
+    def _cost_header_line(self) -> str:
+        """The spend line of the state header, with its newline, or nothing."""
+        try:
+            separate = getattr(self.config, "oversight_connection", None)
+            priced = has_prices(self.config) or (
+                isinstance(separate, dict) and separate.get("price_input") is not None
+                and separate.get("price_output") is not None)
+            line = header_line(self.config, self.cost.status(), priced)
+        except Exception:
+            return ""
+        return line + "\n" if line else ""
 
     def system_prompt(self, wake_reason: str = "runtime") -> str:
         self_text, meta = self._pinned_mind_texts()
@@ -677,6 +700,9 @@ class Artificium:
         pending_inputs: list[str] | None = None,
         prepared: PreparedRequest | None = None, count: TokenCount | None = None,
     ) -> tuple[str, EngineReply]:
+        # Before anything is prepared or sent: at the daily limit no request
+        # goes out, from either connection (see _cost_limit_gate).
+        self._cost_limit_gate()
         request_id = sortable_id("request_")
         request_log_path = self.paths.model_log / f"{request_id}.json"
         # Which connection serves this request, so each can be priced apart.
@@ -848,6 +874,10 @@ class Artificium:
                 error=str(exc),
                 response=vars(exc.reply) if exc.reply is not None else None,
             )
+            # A failure the provider billed (it reported usage) still counts.
+            billed = self._account_usage(
+                connection, exc.reply.usage if exc.reply is not None else None,
+                exc.reply.raw if exc.reply is not None else None)
             self.records.emit(
                 "model_request_failed",
                 request_id=request_id,
@@ -855,6 +885,9 @@ class Artificium:
                 duration_seconds=round(elapsed, 3),
                 error=f"{type(exc).__name__}: {exc}",
                 model_log_path=str(request_log_path),
+                **({"usage_normalized": billed["usage_normalized"], "cost": billed["cost"],
+                    "cost_source": billed["cost_source"], "cost_currency": billed["cost_currency"]}
+                   if billed else {}),
             )
             self.records.life(
                 "engine_request_failed",
@@ -908,6 +941,8 @@ class Artificium:
         )
         throughput = throughput_stats(reply.usage, reply.raw, elapsed)
         usage_normalized = normalize_usage(reply.usage, reply.raw)
+        priced = self._account_usage(connection, reply.usage, reply.raw) or {
+            "cost": None, "cost_source": "unknown", "cost_currency": self.config.price_currency}
         # (B3) Feed this request's real/estimate pair back into the persisted
         # calibration ratio so the next estimate-sourced count benefits.
         # The ratio is persisted for one provider/model: a fresh-context
@@ -925,6 +960,9 @@ class Artificium:
             content=reply.content,
             usage=reply.usage,
             usage_normalized=usage_normalized,
+            cost=priced["cost"],
+            cost_source=priced["cost_source"],
+            cost_currency=priced["cost_currency"],
             finish_reason=reply.finish_reason,
             duration_seconds=round(elapsed, 3),
             throughput=throughput,
@@ -939,6 +977,8 @@ class Artificium:
             duration_seconds=round(elapsed, 3),
             usage=reply.usage,
             usage_normalized=usage_normalized,
+            cost=priced["cost"],
+            cost_source=priced["cost_source"],
             finish_reason=reply.finish_reason,
             throughput=throughput,
             estimated_tokens=count.tokens,
@@ -948,9 +988,85 @@ class Artificium:
         self.console.line(
             "engine",
             f"request {request_id} completed in {elapsed:.1f}s"
-            + format_throughput(throughput),
+            + format_throughput(throughput)
+            + (f", cost {money(priced['cost'])} {priced['cost_currency']}"
+               if priced["cost"] is not None else ""),
         )
         return request_id, reply
+
+    def _account_usage(self, connection: str, raw_usage: dict[str, Any] | None,
+                       raw: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Price one reply and add it to today's ledger.
+
+        The connection's own prices apply (``self.config`` is the oversight
+        connection's while one of its requests runs). Returns the normalized
+        usage and the cost, or None when the provider reported no usage at
+        all. A ledger failure is recorded and never stops the life-loop.
+        """
+        if not isinstance(raw_usage, dict) or not raw_usage:
+            return None
+        normalized = normalize_usage(raw_usage, raw)
+        cost, source = price_usage(self.config, raw_usage, normalized)
+        currency = getattr(self.config, "price_currency", "USD")
+        try:
+            self.cost.record(connection, normalized, cost, currency=currency)
+        except Exception as exc:
+            self.records.emit("cost_ledger_failed", error=f"{type(exc).__name__}: {exc}")
+        return {"usage_normalized": normalized, "cost": cost, "cost_source": source,
+                "cost_currency": currency}
+
+    def _cost_limit_gate(self) -> None:
+        status = self.cost.status()
+        if status["limited"]:
+            raise CostLimitReached(
+                f"daily cost limit reached ({money(status['spent'])} of {money(status['limit'])} "
+                f"{status['currency']}); no request was sent. Requests resume at "
+                f"{status['reset_at']} ({status['timezone']}).",
+                reset_epoch=status["reset_epoch"])
+
+    def _cost_limited(self) -> bool:
+        try:
+            return bool(self.cost.status()["limited"])
+        except Exception:
+            return False
+
+    def _cost_events(self) -> list[str]:
+        """The one notice per day at WARN_FRACTION of the limit."""
+        status = self.cost.status()
+        if not status["warn_due"]:
+            return []
+        self.cost.mark_warned()
+        self.records.emit("cost_warning_issued", spent=status["spent"], limit=status["limit"],
+                          currency=status["currency"], reset_at=status["reset_at"])
+        return [self.prompts.event(
+            "cost_limit_near",
+            percent=f"{status['fraction'] * 100:.0f}",
+            spent=money(status["spent"]), limit=money(status["limit"]),
+            remaining=money(status["limit"] - status["spent"]),
+            currency=status["currency"], reset_at=status["reset_at"],
+            timezone=status["timezone"])]
+
+    def _start_cost_pause(self) -> None:
+        """Sleep until the day resets: the sleep mechanism, with a reason that
+        incoming messages and notifications do not end (they stay queued)."""
+        status = self.cost.status()
+        wake_at = float(status["reset_epoch"])
+        now = time.time()
+        atomic_write_json(self.paths.sleep_state, {
+            "active": True, "mode": "timed", "seconds": max(0.0, wake_at - now),
+            "started_at": utc_now(), "wake_at_epoch": wake_at, "reason": "cost_limit",
+        })
+        detail = {"spent": status["spent"], "limit": status["limit"],
+                  "currency": status["currency"], "reset_at": status["reset_at"],
+                  "reset_epoch": wake_at, "timezone": status["timezone"]}
+        self._write_state("cost_limited", **detail)
+        self.records.emit("cost_limit_reached", **detail)
+        self.records.life("cost_limit_reached", **detail)
+        self.console.line(
+            "cost",
+            f"daily limit reached ({money(status['spent'])} of {money(status['limit'])} "
+            f"{status['currency']}); model requests are held until {status['reset_at']} "
+            f"({status['timezone']}); incoming messages stay queued")
 
     def _review(self, messages: list[dict[str, Any]]) -> tuple[str, str]:
         """One fresh-context request for request_review.
@@ -983,7 +1099,9 @@ class Artificium:
             return separate, key
         model = self.config.oversight_model
         if model and model != self.config.model:
-            return dataclasses.replace(self.config, model=model), self.api_key
+            # Another model has other prices: the worker's do not carry over.
+            return dataclasses.replace(
+                self.config, model=model, **{name: None for name in PRICE_FIELDS}), self.api_key
         return None
 
     def _oversight_engine(self, config: Config, key: str | None) -> Engine:
@@ -1018,6 +1136,8 @@ class Artificium:
             self.engine = self._oversight_engine(config, key)
             self.config, self._connection = config, "oversight"
             request_id, reply = self._complete(messages, wake_reason=wake_reason)
+        except CostLimitReached:
+            raise
         except Exception as exc:
             self.records.emit(
                 "oversight_connection_failed", connection="oversight",
@@ -1249,10 +1369,15 @@ class Artificium:
                 restored = history[:cut]
                 summary, omitted = "", False
                 if use_summary:
+                    self._cost_limit_gate()
+                    extra: dict[str, Any] = {}
+                    if "observe" in inspect.signature(summarize).parameters:
+                        extra["observe"] = lambda reply: self._account_usage(
+                            "worker", reply.usage, reply.raw)
                     summary, omitted = summarize(
                         config=self.config, api_key=self.api_key, history=history,
                         original_log=state["original_log"], attempt=attempt,
-                        prompts=self.prompts, records=self.records,
+                        prompts=self.prompts, records=self.records, **extra,
                     )
                     restored = []
                 if self._stop:
@@ -1498,6 +1623,25 @@ class Artificium:
             atomic_write_json(self.paths.sleep_state, state)
             self.records.emit("sleep_ended", reason="engine_retry_timer")
             return False
+        if state.get("reason") == "cost_limit":
+            # Held until the day resets, or until the limit no longer holds
+            # (raised or removed, then restarted). Messages wait in the queue.
+            reset = time.time() >= float(state.get("wake_at_epoch", 0))
+            if not reset and self._cost_limited():
+                return True
+            reason = "cost_limit_reset" if reset else "cost_limit_lifted"
+            state.update(active=False, woke_at=utc_now(), reason=reason)
+            atomic_write_json(self.paths.sleep_state, state)
+            self.records.emit("sleep_ended", reason=reason)
+            self.records.life("sleep_ended", reason=reason, mode="timed",
+                              sleep_started_at=state.get("started_at"), wake_events=[])
+            self.notifications.create(
+                type="wake", source="artificium_runtime",
+                summary=f"Model requests resumed ({reason}).",
+                metadata={"reason": reason, "sleep_started_at": state.get("started_at"),
+                          "timed_sleep_interrupted": False})
+            self.console.line("cost", "model requests resumed")
+            return False
         reason: str | None = None
         interrupted = False
         if self.notifications.has_new():
@@ -1621,6 +1765,7 @@ class Artificium:
             )))
         inputs.extend(self._context_events())
         inputs.extend(self._disk_space_events())
+        inputs.extend(self._cost_events())
         inputs.extend(self._artifact_events())
         inputs.extend(self._pinned_mind_notices())
         # Recheck the memory map when it changes, without needing a timed
@@ -2139,6 +2284,11 @@ class Artificium:
                 or time.monotonic() - started > self.config.max_turn_seconds
             ):
                 break
+            if continuous and self._cost_limited():
+                # Before anything is claimed or collected; run_forever starts
+                # the pause. A one-off run reaches the gate in _complete.
+                self.records.emit("turn_interrupted", turn_id=turn_id, reason="cost_limit")
+                break
             round_number += 1
             self._refresh_key()
             if continuous:
@@ -2331,6 +2481,7 @@ class Artificium:
             "context_window_tokens": self.config.context_window_tokens,
             "working_memory_tokens": self.config.working_memory_limit,
             "oversight_connection": self._oversight_summary(),
+            "cost": self.cost.status(),
             "auto_repair": self.config.auto_repair,
             "meta_memory_tokens": meta_metrics["tokens"],
             "meta_memory_words": meta_metrics["words"],
@@ -2481,10 +2632,15 @@ class Artificium:
                         time.sleep(self.config.poll_seconds)
                         continue
                     # Between turns and during sleep: a due check can end a sleep.
-                    for note in self.oversight.tick():
-                        self.console.line("oversight", note)
+                    # Oversight makes model requests, so its checks wait out a pause.
+                    if not self._cost_limited():
+                        for note in self.oversight.tick():
+                            self.console.line("oversight", note)
                     if self._sleep_active():
                         time.sleep(self.config.poll_seconds)
+                        continue
+                    if self._cost_limited():
+                        self._start_cost_pause()
                         continue
                     event_ready = self.notifications.has_new()
                     retry_ready = self._pending_recovery() is not None
@@ -2503,6 +2659,9 @@ class Artificium:
                     try:
                         self.run_turn(trigger=trigger, continuous=True)
                         error_repeats = 0
+                    except CostLimitReached:
+                        # Not a failure: the next pass starts the pause.
+                        continue
                     except Exception as exc:
                         error_repeats += 1
                         self.records.emit(

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from . import _bootstrap
+from .cost import PRICE_FIELDS, check_currency, check_limit, check_price, check_timezone
 from .filesystem import Paths, atomic_write_json, read_json
 
 
@@ -134,7 +135,7 @@ MODEL_FIELDS = frozenset({
     "context_window_source", "request_timeout_seconds", "model_capabilities",
     "vision", "model_supports_vision", "prompt_cache", "prompt_cache_key",
     "stream_responses", "stall_timeout_seconds", "first_token_timeout_seconds",
-    "tool_mode",
+    "tool_mode", "price_currency", *PRICE_FIELDS,
     *GENERATION_FIELDS,
 })
 
@@ -300,6 +301,20 @@ class Config:
     # used). Kept complete and normalized after validation; written to its own
     # section, never to "harness".
     oversight_connection: dict[str, Any] | None = None
+    # Prices of the connection, per million tokens (None: unknown, so requests
+    # are counted in tokens but not in money). Model-section fields: the worker
+    # and the oversight connection each carry their own. No conversion between
+    # currencies; the label is only shown.
+    price_input: float | None = None
+    price_cached_input: float | None = None
+    price_cache_write: float | None = None
+    price_output: float | None = None
+    price_currency: str = "USD"
+    # Spend limit per local day over both connections together, in that
+    # currency; None means no limit. The day starts at local midnight in
+    # cost_day_timezone (an IANA name), or this machine's zone when None.
+    daily_cost_limit: float | None = None
+    cost_day_timezone: str | None = None
 
     def __post_init__(self) -> None:
         if self.context_window_source not in {"manual", "detected", "default"}:
@@ -408,6 +423,12 @@ class Config:
             self.oversight_connection = {item.name: getattr(built, item.name)
                                          for item in dataclasses.fields(built)
                                          if item.name in OVERSIGHT_FIELDS}
+        for name in PRICE_FIELDS:
+            check_price(name, getattr(self, name))
+        check_currency(self.price_currency)
+        self.price_currency = self.price_currency.strip()
+        check_limit(self.daily_cost_limit)
+        check_timezone(self.cost_day_timezone)
         if self.engine_wait_notice_seconds <= 0:
             raise ValueError("engine_wait_notice_seconds must be positive")
         if self.engine_wait_repeat_seconds <= 0:

@@ -663,6 +663,12 @@ def render_sleep_started(record, options, session=None):
     return lines
 
 
+def render_cost_limit_reached(record, options, session=None):
+    return [f"[cost] daily limit reached ({record.get('spent')} of {record.get('limit')} "
+            f"{record.get('currency') or ''}); model requests are held until "
+            f"{record.get('reset_at')} ({record.get('timezone')}); messages stay queued"]
+
+
 def render_decision_requested(record, options, session=None):
     count = record.get("open_decisions")
     waiting = f" ({count} open)" if isinstance(count, int) and count > 0 else ""
@@ -720,6 +726,7 @@ _RENDERERS: dict[str, Callable[[dict, RenderOptions, "WatchSession | None"], lis
     events.KIND_TURN_INTERRUPTED: render_turn_interrupted,
     events.KIND_SLEEP_STARTED: render_sleep_started,
     events.KIND_SLEEP_ENDED: render_sleep_ended,
+    events.KIND_COST_LIMIT_REACHED: render_cost_limit_reached,
     events.KIND_DECISION_REQUESTED: render_decision_requested,
     events.KIND_EVALUATION_COMPLETED: render_evaluation_completed,
     events.KIND_PREVIOUS_RUN_ENDED_UNCLEANLY: render_previous_run_ended_uncleanly,

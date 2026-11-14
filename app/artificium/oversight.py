@@ -29,6 +29,7 @@ from typing import Any, Callable
 
 from .blockers import BlockerTracker
 from .config import Config
+from .cost import CostLimitReached
 from .directives import SYSTEM_SENDERS, DirectiveStore
 from .filesystem import Paths, atomic_write_json, read_json
 from .interactions import InteractionStore
@@ -193,6 +194,8 @@ class Oversight:
         for step in (self.process_defaults, self.maybe_evaluate):
             try:
                 done += step(now)
+            except CostLimitReached:
+                break  # a daily limit holds model requests back: due checks wait
             except Exception as exc:  # a failed check must never stop the life-loop
                 self.records.emit("oversight_failed", step=getattr(step, "__name__", "step"),
                                   error=f"{type(exc).__name__}: {exc}")
@@ -238,6 +241,8 @@ class Oversight:
         attempts = int(entry.get("attempts", 0)) + 1
         try:
             verdict, reason, request_id = self._check_default(decision)
+        except CostLimitReached:
+            raise  # not an attempt: the check runs after the pause
         except Exception as exc:
             reason = f"the check could not run ({type(exc).__name__}: {exc})"
             if attempts < CHECK_ATTEMPTS:
@@ -426,9 +431,20 @@ class Oversight:
         state = self._state()
         # Noted before the call: a failing model is retried after a pause, not
         # on every tick.
+        previous_attempt = state["evaluation"].get("attempt_at")
         state["evaluation"]["attempt_at"] = _stamp(now)
         self._save(state)
-        request_id, text = self.complete(messages)
+        try:
+            request_id, text = self.complete(messages)
+        except CostLimitReached:
+            # Nothing was sent: forget the attempt so it is due again after the pause.
+            state = self._state()
+            if previous_attempt is None:
+                state["evaluation"].pop("attempt_at", None)
+            else:
+                state["evaluation"]["attempt_at"] = previous_attempt
+            self._save(state)
+            raise
         review = _THINK.sub("", text).strip() or "(the evaluator returned no text)"
         match = _VERDICT.search(review)
         verdict = match.group(1).strip().lower()[:40] if match else "unknown"

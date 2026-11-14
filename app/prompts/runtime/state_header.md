@@ -7,7 +7,7 @@ Working context estimate: approximately {{context_tokens}} tokens ({{context_per
 This header is a local estimate. The harness uses a provider preflight count when available to enforce offloading and generation budgets for the complete request.
 Tokens added since last context notice: {{tokens_since_last_notice}}
 Context status: {{context_status}}
-Pending interaction focus: {{current_interaction_or_none}}
+{{cost_line}}Pending interaction focus: {{current_interaction_or_none}}
 Pending event count: {{pending_event_count}}
 Active Infinite Attention stream: {{active_stream_or_none}}
 Pre-sleep reflection issued this wake: {{pre_sleep_issued}}
