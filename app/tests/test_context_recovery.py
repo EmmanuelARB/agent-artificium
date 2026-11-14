@@ -16,7 +16,7 @@ from artificium.engine import Engine, EngineError, EngineReply, make_engine
 from artificium.filesystem import Paths, read_json, read_jsonl
 from artificium.memory import TokenEstimator
 from artificium.records import Console
-from artificium.recovery import helper_config, source_excerpt, summarize
+from artificium.recovery import helper_config, repairable, source_excerpt, summarize
 from artificium.runtime import Artificium
 from artificium.setup import SetupOptions, SetupWizard
 
@@ -324,6 +324,23 @@ class RecoveryCase(unittest.TestCase):
         self.assertEqual(artifact.read_text(), "already completed")
         archive = next(self.paths.context_archive.glob("repair_*.jsonl"))
         self.assertEqual(archive.read_bytes(), original)
+
+    def test_413_without_images_is_repaired_from_earlier_context(self):
+        error = EngineError("HTTP 413: Request Entity Too Large", status=413)
+        self.assertTrue(repairable(error, self.config, None))
+        for status in (401, 402, 403, 404, 405, 429, 503):
+            self.assertFalse(repairable(EngineError("x", status=status), self.config, None))
+        engine = SequenceEngine(error, EngineReply("<think>Inspect current files before continuing.</think>"))
+        agent = self.agent(engine)
+        self.add_successful_rounds(agent)
+        with mock.patch("artificium.runtime.summarize") as helper:
+            agent.run_turn()
+        helper.assert_not_called()
+        self.assertEqual(len(engine.requests), 2)
+        retried = json.dumps(engine.requests[1])
+        self.assertNotIn("RESULT_4", retried)
+        self.assertIn("AUTOMATIC REQUEST REPAIR", retried)
+        self.assertFalse(agent._request_blocked)
 
     def test_three_retries_step_back_through_successful_inputs_then_pause(self):
         ConfigStore(self.paths).save(dataclasses.replace(self.config, max_life_loop_rounds=10))

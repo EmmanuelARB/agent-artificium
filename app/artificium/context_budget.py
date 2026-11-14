@@ -93,7 +93,8 @@ def check_input(config: Config, count: TokenCount) -> None:
 
 
 def context_exhausted(error: EngineError, config: Config, count: TokenCount | None) -> bool:
-    if error.kind == "context":
+    # A body the server refuses as too large is a size problem in the input.
+    if error.kind == "context" or error.status == 413:
         return True
     reply = error.reply
     if not reply or reply.finish_reason not in {"length", "incomplete", "max_tokens", "MAX_TOKENS"}:

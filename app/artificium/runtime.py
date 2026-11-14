@@ -623,7 +623,8 @@ class Artificium:
         count = measure(self.engine, prepared, messages, self.estimator)
         return prepared, apply_calibration(count, calibration)
 
-    def _downgrade_context_images(self, reason: str) -> int:
+    def _downgrade_context_images(self, reason: str, *, too_large: bool = False,
+                                  body_bytes: int | None = None) -> int:
         active = self.visual.list()
         if not active:
             return 0
@@ -632,6 +633,20 @@ class Artificium:
             reason="engine_vision_fallback",
         )
         paths = [item.get("path") for item in released["released"]]
+        if too_large:
+            sizes = ", ".join(f"{item.get('path')} ({item.get('bytes')} bytes)" for item in active)
+            summary = (
+                "The server rejected the request body as too large (HTTP 413"
+                f"{f', {body_bytes} bytes in total' if body_bytes else ''}). Active images were "
+                f"released: {sizes}; images are sent base64-encoded, a third larger than the "
+                "file. Fewer or smaller images may pass; otherwise use or build OCR or "
+                "another image-processing tool."
+            )
+        else:
+            summary = (
+                "The engine rejected visual input. Active images were released; "
+                "use or build OCR or another image-processing tool if they matter."
+            )
         self._append_runtime(
             [
                 self.prompts.event(
@@ -639,12 +654,10 @@ class Artificium:
                     event_type="vision_fallback",
                     created_at=utc_now(),
                     source="engine_adapter",
-                    summary=(
-                        "The engine rejected visual input. Active images were released; "
-                        "use or build OCR or another image-processing tool if they matter."
-                    ),
+                    summary=summary,
                     path_or_none=paths or "none",
-                    metadata_or_none={"reason": reason, "released_images": active},
+                    metadata_or_none={"reason": reason, "released_images": active,
+                                      **({"request_body_bytes": body_bytes} if body_bytes else {})},
                 )
             ],
             origin="vision_fallback",
@@ -840,12 +853,16 @@ class Artificium:
                 f"engine request {request_id} failed after {elapsed:.1f}s; "
                 f"details: {request_log_path}; {type(exc).__name__}: {exc}"
             )
+            # A body-size refusal is about the images' weight, not the model's
+            # capability, so it applies even when vision is declared supported.
+            too_large = exc.status == 413 and not exc.image_input_unsupported
             if (
-                self.config.vision == "auto"
-                and self._contains_image(messages)
-                and exc.status in {400, 413, 415, 422}
-                and exc.image_input_unsupported
-                and self._downgrade_context_images(str(exc))
+                self._contains_image(messages)
+                and ((self.config.vision == "auto" and exc.status in {400, 415, 422}
+                      and exc.image_input_unsupported) or too_large)
+                and self._downgrade_context_images(
+                    str(exc), too_large=too_large,
+                    body_bytes=len(json_dumps(prepared.payload).encode("utf-8")) if too_large else None)
             ):
                 return self._complete(
                     self._request_messages(pending_inputs or [], wake_reason="vision_fallback"),
