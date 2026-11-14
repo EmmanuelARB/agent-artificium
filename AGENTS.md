@@ -37,6 +37,7 @@ writes). Never commit them, and never read or print `.secrets.json`.
 | Model transport | `engine.py`, `engine_stream.py` (SSE streaming, stall watchdog), `engine_adapters.py`, `engine_native.py` (native tool calling: history replay), `engine_providers.py`, `connection.py`, `oversight_connection.py` (short check of the oversight connection), `discovery.py`, `vision.py` |
 | Context budget | `context_budget.py`, `calibration.py`, `usage.py` |
 | Cost | `cost.py` (prices, provider-reported cost, the per-day `CostLedger`, the 80% / limit status, `CostLimitReached`, `cost_limit_problem`); used by `runtime.py` (`_account_usage`, `_cost_limit_gate`, `_cost_events`, `_start_cost_pause`) |
+| Conversation identity | `session.py` (`LifeLoopSession`, `new_session_id`, `SESSION_HEADER`); used by `runtime.py` (`_prepare`, `_oversight_complete`) and by the `opencode_go` adapter (`engine_adapters.py`), which also needs the product User-Agent every transport sends; the definition of a conversation is in the module docstring and the README "OpenCode Go" section |
 | Tools | `tools.py` (registry and dispatch), `tool_schemas.py` (native tool definitions), `tool_files.py`, `tool_memory.py`, `tool_interactions.py`, `tool_review.py` (`request_review`, `consult`), `tool_attention.py` (Infinite Attention), `tool_loader.py` (loads agent-editable tools from `mind/tools/`) |
 | Memory and continuity | `memory.py` (long-term memory, working memory, offloading) |
 | Interactions and events | `interactions.py`, `events.py` |

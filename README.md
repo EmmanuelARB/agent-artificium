@@ -109,7 +109,7 @@ python3 artificium.py watch
 python3 artificium.py stop
 ```
 
-Supported connections: **llama.cpp, Ollama, vLLM, OpenRouter, OpenAI Responses, Gemini, Anthropic, OpenAI-compatible servers, and custom JSON APIs**. Local inference and custom setups are covered in the [complete guide](#complete-guide).
+Supported connections: **llama.cpp, Ollama, vLLM, Mistral, OpenRouter, OpenCode Go, OpenAI Responses, Gemini, Anthropic, OpenAI-compatible servers, and custom JSON APIs**. Local inference and custom setups are covered in the [complete guide](#complete-guide).
 
 <details>
 <summary><strong>Try Artificium on Runpod: setup and example prompts</strong></summary>
@@ -191,7 +191,7 @@ Provider-native function calling is not required, and text stays the default. Ea
 
 This keeps interaction and memory consistent across backends. Reasoning controls, vision, capacity, and task performance still depend on the model and server.
 
-**Native tool calling** (`model.tool_mode = "native"`, `--tool-mode native`) is available on the chat-completions adapters (Mistral, OpenRouter, vLLM, llama.cpp, and other OpenAI-compatible servers). It suits models that are trained on, and served with, their own tool-calling and thinking formats, where the text protocol competes with what the model expects. The request then carries JSON-schema tool definitions generated from the same sources as the text catalog (handler signatures, documented examples, and each tool's section of `tools/core_tools.md`), the prompt pack swaps `always/tool_protocol.md` for `always/tool_protocol_native.md` and drops the catalog (a smaller prompt), and the API's structured `tool_calls` come back and run through the same validation, ordering, and repair as text requests. Working memory is unchanged: turns are still stored as text, and history is translated at the request boundary. A turn whose calls and results pair up exactly is replayed as structured `tool_calls` and `tool` messages; anything else stays text. Only life-loop requests carry tool definitions, so reviews, summaries, and checks never declare tools. A server must support tool calling (llama.cpp needs `--jinja`; vLLM needs `--enable-auto-tool-choice` and a tool parser). A new Mistral setup defaults to native; every other provider defaults to text.
+**Native tool calling** (`model.tool_mode = "native"`, `--tool-mode native`) is available on the chat-completions adapters (Mistral, OpenRouter, OpenCode Go, vLLM, llama.cpp, and other OpenAI-compatible servers). It suits models that are trained on, and served with, their own tool-calling and thinking formats, where the text protocol competes with what the model expects. The request then carries JSON-schema tool definitions generated from the same sources as the text catalog (handler signatures, documented examples, and each tool's section of `tools/core_tools.md`), the prompt pack swaps `always/tool_protocol.md` for `always/tool_protocol_native.md` and drops the catalog (a smaller prompt), and the API's structured `tool_calls` come back and run through the same validation, ordering, and repair as text requests. Working memory is unchanged: turns are still stored as text, and history is translated at the request boundary. A turn whose calls and results pair up exactly is replayed as structured `tool_calls` and `tool` messages; anything else stays text. Only life-loop requests carry tool definitions, so reviews, summaries, and checks never declare tools. A server must support tool calling (llama.cpp needs `--jinja`; vLLM needs `--enable-auto-tool-choice` and a tool parser). A new Mistral or OpenCode Go setup defaults to native; every other provider defaults to text.
 
 </details>
 
@@ -453,6 +453,7 @@ A single served model is selected automatically, and no placeholder API key is n
 | `vllm` | `/v1/chat/completions` | `http://127.0.0.1:8000/v1` |
 | `mistral` | `/v1/chat/completions` | — |
 | `openrouter` | `/api/v1/chat/completions` | — |
+| `opencode-go` | `/inference/go/openai/v1/chat/completions` | — |
 | `openai` | `/v1/responses` | — |
 | `gemini` | `models/{model}:generateContent` | — |
 | `anthropic` | `/v1/messages` | — |
@@ -472,7 +473,7 @@ For llama.cpp, discovery reads `/v1/models` and `/props?model=ID`: `default_gene
 
 ### Credentials and connection checks
 
-Use the masked setup prompt, `--api-key-file /path/to/key`, `ARTIFICIUM_API_KEY`, or the provider variable: `LLAMA_API_KEY`, `OLLAMA_API_KEY`, `VLLM_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY`. Avoid typing a secret directly into a shell command.
+Use the masked setup prompt, `--api-key-file /path/to/key`, `ARTIFICIUM_API_KEY`, or the provider variable: `LLAMA_API_KEY`, `OLLAMA_API_KEY`, `VLLM_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY`. Avoid typing a secret directly into a shell command.
 
 Saved keys live in `.secrets.json` in the project folder (mode 0600); the oversight connection's key (see "Oversight connection") is stored there under its own name, apart from the worker's. Git ignores it and it sits outside `workspace/`, so it survives upgrades and resets. An explicitly saved key takes precedence, so runtime uses the key that passed verification. Otherwise `ARTIFICIUM_API_KEY` comes before the provider variable and the saved fallback. Saved keys are bound to provider and address. `key` verifies a replacement before saving it, and a running agent reloads it. The agent can read its key; apply the spending controls from Quick start.
 
@@ -554,8 +555,8 @@ A few advanced settings have no CLI flag. Edit them in `config.json`, then resta
 
 | Key | Default | Meaning |
 |---|---|---|
-| `model.tool_mode` | `text` | `text` is Artificium's `<tool_call>` protocol; `native` uses the API's own tool calling on chat-completions adapters (feature 2). A new Mistral setup defaults to `native`. |
-| `model.stream_responses` | `false` | Stream replies from llama.cpp, vLLM, OpenRouter, and OpenAI-compatible servers, so `watch` shows progress during long generations. |
+| `model.tool_mode` | `text` | `text` is Artificium's `<tool_call>` protocol; `native` uses the API's own tool calling on chat-completions adapters (feature 2). A new Mistral or OpenCode Go setup defaults to `native`. |
+| `model.stream_responses` | `false` | Stream replies from llama.cpp, vLLM, Mistral, OpenRouter, OpenCode Go, and OpenAI-compatible servers, so `watch` shows progress during long generations. |
 | `model.prompt_cache` | `true` | Anthropic cache breakpoints (see feature 17). |
 | `model.prompt_cache_key` | `null` | `"auto"` or a string sends a `prompt_cache_key` to OpenAI Responses and OpenAI-compatible servers. |
 | `harness.pinned_mind_snapshot` | `true` | Freeze Self and meta-memory between context rebuilds for cacheability. |
@@ -602,7 +603,7 @@ python3 artificium.py restart
 
 ### Cost and the daily limit
 
-Every model request is priced and added to a per-day ledger (`workspace/logs/runtime/cost-ledger.json`, the last 60 days, kept per connection: requests, tokens by kind, cost, and requests whose cost is unknown). Each connection has its own prices, per million tokens: input, cached input (cache read), cache write and output, plus a currency label. Reasoning tokens are billed as output. A cost the provider reports in the response (OpenRouter's `usage.cost`) replaces the computed one, and `model_response` records the cost with its source: `reported`, `computed` or `unknown`. Without prices, tokens are still counted and the cost is unknown. A request that failed but whose response reported usage is counted too.
+Every model request is priced and added to a per-day ledger (`workspace/logs/runtime/cost-ledger.json`, the last 60 days, kept per connection: requests, tokens by kind, cost, and requests whose cost is unknown). Each connection has its own prices, per million tokens: input, cached input (cache read), cache write and output, plus a currency label. Reasoning tokens are billed as output. A cost the provider reports in the response (`usage.cost`, from OpenRouter and OpenCode Go) replaces the computed one, and `model_response` records the cost with its source: `reported`, `computed` or `unknown`. Without prices, tokens are still counted and the cost is unknown. A request that failed but whose response reported usage is counted too.
 
 ```bash
 python3 artificium.py configure model --price-input 3 --price-cached-input 0.3 --price-cache-write 3.75 --price-output 15
@@ -672,6 +673,18 @@ python3 artificium.py connect --reset-generation-settings --reasoning auto
 ```
 
 To pin one OpenRouter inference provider, use `configure model --openrouter-provider cerebras`, which sends `provider.only: ["cerebras"]`; `automatic` removes the constraint. A pinned route fails if that provider cannot serve the model and controls requested.
+
+### OpenCode Go
+
+```bash
+python3 artificium.py setup --provider opencode-go --no-launch
+```
+
+The key (`oc_sk_...`) comes from your OpenCode account: the masked prompt, `--api-key-file`, or `OPENCODE_API_KEY`. Models are listed live from `/inference/go/v1/models` (derived from the configured base URL, `https://opencode.ai/inference/go/openai/v1`), with context length where the list gives it, and every text model is reached through Chat Completions, which the gateway translates when a model's own API differs. A new setup streams and uses native tool calling. Free-tier models answer HTTP 403 to any client but OpenCode itself; Artificium says so and asks for a paid Go model.
+
+OpenCode Go's terms ask a client for typical coding-agent traffic, its own `User-Agent`, and a stable session ID per conversation in the `x-opencode-session` header (traffic is monitored for abuse). Artificium sends its product `User-Agent` (`Artificium-<codename>/<release>`, never an HTTP library's default) on every request of every provider, and `x-opencode-session: ses_...` on every request to this one, worker and oversight alike. What counts as a conversation: the life-loop's working context is one, with an ID that is stable across turns and across restarts (kept in `workspace/logs/runtime/life-loop-session.json`) and renewed whenever the working context is replaced rather than extended (a working-memory offload, a request repair, any other rebuild), because the cached prefix is then different. Each fresh-context request (`request_review`, `consult`, the evaluation, the decision-default check, the emergency summary, a connection check, a model list lookup) is a conversation of its own with its own ID. An ID is `ses_` and random hex: never the key, the instance path or anything the agent wrote. Do not override `User-Agent` or the session header in `model.headers`.
+
+Cost: `usage.cost` is the dollars actually charged (0 within the plan's limits, above 0 with Extra Usage) and is what the ledger, `model_response` and the daily cost limit count, so no prices are needed. Within the plan's limits that is 0 and the figure to watch is the allowance: each response also reports `opencode.allowance` (how much of the plan's monthly limit the request used, in dollars) and `opencode.list_cost` (the cost at list price). `model_response` records both, the ledger sums them per connection and day, and `python3 artificium.py cost` shows them (`plan allowance used ..., ... at list price`). Artificium holds no table of the plan's limits (they are per model and change); compare the allowance with what OpenCode shows for your plan.
 
 </details>
 
