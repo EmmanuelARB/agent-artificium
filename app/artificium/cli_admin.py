@@ -25,6 +25,7 @@ from .config import (
     load_api_key_file,
     requires_api_key,
 )
+from . import cost as cost_module
 from .connection import verify_connection
 from .filesystem import Paths
 from .setup import (
@@ -84,6 +85,9 @@ def _setup_options(args: argparse.Namespace) -> SetupOptions:
     # setup.py written before the oversight connection has no such fields.
     options.oversight_off = bool(getattr(args, "off", False))
     options.oversight_check = bool(getattr(args, "check", False))
+    for name in ("price_input", "price_cached_input", "price_cache_write", "price_output",
+                 "price_currency", "daily_cost_limit", "cost_day_timezone"):
+        setattr(options, name, getattr(args, name, None))
     return options
 
 
@@ -173,6 +177,8 @@ def _has_reconfigure_values(args: argparse.Namespace) -> bool:
             "offload_threshold",
             "working_memory_tokens",
             "auto_repair",
+            "price_input", "price_cached_input", "price_cache_write", "price_output",
+            "price_currency", "daily_cost_limit", "cost_day_timezone",
         )
     ) or getattr(args, "off", False) or getattr(args, "check", False) or bool(
         getattr(args, "reset_generation_settings", False)
@@ -188,8 +194,12 @@ def _reconfigure(paths: Paths, args: argparse.Namespace) -> None:
         print("What would you like to configure?\n")
         print("1. Model connection and harness settings")
         print("2. Oversight connection (a second model for periodic checks, request_review and consult)")
-        if input("\nChoose [1]: ").strip() == "2":
+        print("3. Prices and the daily cost limit")
+        chosen = input("\nChoose [1]: ").strip()
+        if chosen == "2":
             options.scope = "oversight"
+        elif chosen == "3":
+            options.scope = "cost"
     wizard = SetupWizard(paths)
     updated = wizard.reconfigure(options, interactive=interactive)
     pid, alive = _cli._pid_state(paths)
@@ -212,11 +222,35 @@ def _reconfigure(paths: Paths, args: argparse.Namespace) -> None:
           + (f" ({updated.working_memory_fraction:.0%} of model)" if updated.working_memory_tokens is None and updated.working_memory_fraction
              else " (same as model)" if updated.working_memory_tokens is None else "")
           + f"; automatic repair: {'on' if updated.auto_repair else 'off'}")
+    print(cost_summary(updated))
     if alive and pid:
         print(
             f"Artificium is currently running as PID {pid}. Restart it to apply "
             "configuration changes: python3 artificium.py restart"
         )
+
+
+def _price_text(config) -> str:
+    if config.price_input is None and config.price_output is None:
+        return "no prices"
+    parts = [(label, getattr(config, name)) for label, name in (
+        ("input", "price_input"), ("cached input", "price_cached_input"),
+        ("cache write", "price_cache_write"), ("output", "price_output"))]
+    return ", ".join(f"{label} {value:g}" for label, value in parts if value is not None) \
+        + f" {config.price_currency} per million tokens"
+
+
+def cost_summary(config) -> str:
+    """Prices of each connection and the daily limit, for the configure output."""
+    lines = [f"Prices, worker: {_price_text(config)}"]
+    separate = config.oversight_config()
+    if separate is not None:
+        lines.append(f"Prices, oversight: {_price_text(separate)}")
+    limit = config.daily_cost_limit
+    zone = config.cost_day_timezone or "this machine's zone"
+    lines.append("Daily cost limit: " + ("none" if limit is None else
+                 f"{limit:g} {cost_module.limit_currency(config)}, days end at midnight ({zone})"))
+    return "\n".join(lines)
 
 
 def _print_oversight_result(options: SetupOptions, updated, check: dict | None) -> None:
@@ -237,6 +271,7 @@ def _print_oversight_result(options: SetupOptions, updated, check: dict | None) 
               f"reasoning: {reasoning_label(oversight)}")
         print("It serves the periodic checks, request_review and consult, with its own "
               "key, and is billed separately from the worker.")
+        print(cost_summary(updated))
 
 
 def _replace_key(paths: Paths, args: argparse.Namespace) -> None:

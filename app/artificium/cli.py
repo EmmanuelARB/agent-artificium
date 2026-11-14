@@ -157,10 +157,39 @@ def _setup_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--yes", action="store_true", help="Use supplied values and detected defaults without prompts; still verify inference")
 
 
+def _amount(text: str) -> float | str:
+    """A price or limit: a non-negative number, or off to clear it."""
+    if text.strip().lower() in {"off", "none", "unset"}:
+        return "off"
+    try:
+        value = float(text.replace(",", ""))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number (or off)") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError("must not be negative")
+    return value
+
+
+def _cost_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group(
+        "cost settings (prices: configure model or configure oversight; limit: configure harness)")
+    for flag, text in (
+        ("--price-input", "Price of input tokens per million"),
+        ("--price-cached-input", "Price of cached input (cache-read) tokens per million; unset bills them as input"),
+        ("--price-cache-write", "Price of cache-write tokens per million; unset bills them as input"),
+        ("--price-output", "Price of output tokens per million, reasoning included"),
+    ):
+        group.add_argument(flag, type=_amount, metavar="AMOUNT|off", help=text + "; off clears it")
+    group.add_argument("--price-currency", metavar="LABEL", help="Currency label for the prices (default: USD; no conversion)")
+    group.add_argument("--daily-cost-limit", type=_amount, metavar="AMOUNT|off", help="Spend limit per day over both connections, in the prices' currency; model requests stop until the day resets")
+    group.add_argument("--cost-day-timezone", metavar="ZONE|local", help="IANA time zone whose midnight ends the day (default: this machine's)")
+
+
 def _configure_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("scope", nargs="?", choices=["harness", "model", "oversight"], help="Edit one settings group; omitted accepts legacy combined flags. oversight is a second model connection for periodic checks, request_review and consult (same connection flags; its key is stored separately)")
     _harness_arguments(parser)
     _connection_arguments(parser)
+    _cost_arguments(parser)
     group = parser.add_argument_group("oversight settings (configure oversight)")
     group.add_argument("--off", action="store_true", help="Remove the oversight connection and its key")
     group.add_argument("--check", action="store_true", help="Test the saved oversight connection with a short real request; changes nothing")
@@ -300,6 +329,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     attention.add_argument("--output")
 
+    cost = commands.add_parser("cost", help="Spend per day and connection, the daily limit and its reset time")
+    cost.add_argument("--days", type=int, default=7, help="Days to show (default: 7)")
+    cost.add_argument("--json", action="store_true", help="Machine-readable report")
     commands.add_parser("status", help="Read-only runtime summary").add_argument("--json", action="store_true", help="Machine-readable detailed state")
     models = commands.add_parser("models", help="List served models without inference")
     _connection_arguments(models, runtime_settings=False)
@@ -395,6 +427,13 @@ def _dispatch(argv: list[str] | None = None) -> int:
         if args.command == "status":
             state = status_snapshot(paths)
             print(json_dumps(state, pretty=True) if args.json else format_status(state))
+            return 0
+        if args.command == "cost":
+            from .cost import CostLedger, format_report
+            if not store.exists():
+                raise RuntimeError("Artificium is not configured. Run without a command first.")
+            report = CostLedger(paths, store.load()).report(args.days)
+            print(json_dumps(report, pretty=True) if args.json else format_report(report))
             return 0
         if args.command == "models":
             options = _setup_options(args)

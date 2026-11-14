@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigStore, SecretsStore, requires_api_key
+from .cost import CostLedger, money
 from .filesystem import Paths, read_json, read_jsonl
 from .memory import TokenEstimator
 
@@ -82,6 +83,7 @@ def status_snapshot(paths: Paths) -> dict[str, Any]:
     visual = read_json(paths.visual_context, {})
     return {
         "oversight": _oversight_summary(paths, config),
+        "cost": CostLedger(paths, config).status() if config else None,
         "configured": config is not None, "root": str(paths.root), "process": process,
         "provider": config.provider if config else None, "model": config.model if config else None,
         "context_window_tokens": config.context_window_tokens if config else None,
@@ -114,6 +116,20 @@ def _oversight_line(oversight: dict[str, Any] | None) -> str:
     return line + ("; no API key found" if oversight.get("api_key_missing") else "")
 
 
+def _cost_lines(cost: dict[str, Any] | None) -> list[str]:
+    """Today's spend; nothing when there is no limit and no cost to show."""
+    if not cost or (cost["limit"] is None and not cost["requests"]):
+        return []
+    line = f"Spend today: {money(cost['spent'])}"
+    if cost["limit"] is not None:
+        line += f" of {money(cost['limit'])} {cost['currency']} ({cost['fraction'] * 100:.0f}%); resets {cost['reset_at']} ({cost['timezone']})"
+    else:
+        line += f" {cost['currency']}"
+    if cost["unknown_cost_requests"]:
+        line += f"; {cost['unknown_cost_requests']} requests of unknown cost"
+    return [line + "; details: python3 artificium.py cost"]
+
+
 def format_status(state: dict[str, Any]) -> str:
     process = state["process"]
     running = process["alive"] and process["owned"] is not False
@@ -121,12 +137,17 @@ def format_status(state: dict[str, Any]) -> str:
     runtime = state.get("runtime") or {}
     if running and runtime.get("status") == "blocked":
         label = "running; model requests paused"
+    if running and runtime.get("status") == "cost_limited":
+        label = "running; model requests held by the daily cost limit"
     if not state["configured"]:
         label = "not configured"
     lines = [f"Artificium: {label}", f"Workspace: {state['root']}"]
     if running and runtime.get("status") == "blocked":
         lines.append("Error: " + str(runtime.get("error", "unknown")))
         lines.append("Correct the problem, then run: python3 artificium.py restart")
+    if running and runtime.get("status") == "cost_limited":
+        lines.append(f"Held until {runtime.get('reset_at')} ({runtime.get('timezone')}); "
+                     "messages stay queued and are handled after that")
     if process["alive"]:
         lines.append(f"Process: {process['pid']}" + (" (lock belongs to another process)" if process["owned"] is False else ""))
     if state["configured"]:
@@ -137,6 +158,7 @@ def format_status(state: dict[str, Any]) -> str:
             f"Pending events: {len(state['unhandled_interactions'])}; scheduled tasks: {len(state['scheduled_tasks'])}",
             f"Vision: {state['vision_preference']} (effective: {state['effective_vision']})",
             _oversight_line(state.get("oversight")),
+            *_cost_lines(state.get("cost")),
             "Mandatory offloading: " + (f"{state['offload_threshold_percent']:g}%" if state['mandatory_offload'] else "off") + ("; pending" if state['offload_pending'] else ""),
         ])
         sleep = state["sleep"]

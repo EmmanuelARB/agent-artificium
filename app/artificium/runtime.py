@@ -1051,7 +1051,7 @@ class Artificium:
         incoming messages and notifications do not end (they stay queued)."""
         status = self.cost.status()
         wake_at = float(status["reset_epoch"])
-        now = time.time()
+        now = self.cost.clock()
         atomic_write_json(self.paths.sleep_state, {
             "active": True, "mode": "timed", "seconds": max(0.0, wake_at - now),
             "started_at": utc_now(), "wake_at_epoch": wake_at, "reason": "cost_limit",
@@ -1626,7 +1626,7 @@ class Artificium:
         if state.get("reason") == "cost_limit":
             # Held until the day resets, or until the limit no longer holds
             # (raised or removed, then restarted). Messages wait in the queue.
-            reset = time.time() >= float(state.get("wake_at_epoch", 0))
+            reset = self.cost.clock() >= float(state.get("wake_at_epoch", 0))
             if not reset and self._cost_limited():
                 return True
             reason = "cost_limit_reset" if reset else "cost_limit_lifted"

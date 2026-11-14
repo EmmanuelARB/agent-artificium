@@ -36,6 +36,7 @@ NEW_SETUP_DEFAULTS = getattr(_config, "NEW_SETUP_DEFAULTS", {
     "max_tool_output_chars": 20_000,
 })
 NATIVE_TOOL_ADAPTERS = getattr(_config, "NATIVE_TOOL_ADAPTERS", frozenset())
+from .cost import PRICE_FIELDS, cost_limit_problem
 from .engine import DEFAULT_USER_AGENT, EngineError, make_engine
 from .engine_stream import _STREAMING_ADAPTERS
 from .discovery import (ModelDiscovery, discover_models, discover_provider_models,
@@ -101,6 +102,16 @@ class SetupOptions:
     # configure oversight: remove the connection, or only test the saved one.
     oversight_off: bool = False
     oversight_check: bool = False
+    # Prices of the connection being configured, per million tokens, and the
+    # harness's daily limit. None leaves a setting alone; "off" clears it
+    # (for the time zone, "local"). Applied offline, without a model request.
+    price_input: float | str | None = None
+    price_cached_input: float | str | None = None
+    price_cache_write: float | str | None = None
+    price_output: float | str | None = None
+    price_currency: str | None = None
+    daily_cost_limit: float | str | None = None
+    cost_day_timezone: str | None = None
     force: bool = False
 
 
@@ -133,6 +144,27 @@ def _number(prompt: str, default: object, *, minimum: float = 0,
         except ValueError:
             print(f"Enter {'a whole number' if integer else 'a number'} from {minimum:g}"
                   + (f" to {maximum:g}." if maximum is not None else "."))
+
+
+COST_PRICE_OPTIONS = (*PRICE_FIELDS, "price_currency")
+COST_HARNESS_OPTIONS = ("daily_cost_limit", "cost_day_timezone")
+
+
+def _clearable(value: object) -> object:
+    return None if isinstance(value, str) and value.strip().lower() in {"off", "none", "local"} else value
+
+
+def price_values(options: SetupOptions) -> dict[str, object]:
+    """The connection price settings the options ask to change."""
+    return {name: _clearable(getattr(options, name)) for name in COST_PRICE_OPTIONS
+            if getattr(options, name, None) is not None and not (
+                name == "price_currency" and _clearable(options.price_currency) is None)}
+
+
+def cost_harness_values(options: SetupOptions) -> dict[str, object]:
+    """The daily limit and day-boundary zone the options ask to change."""
+    return {name: _clearable(getattr(options, name)) for name in COST_HARNESS_OPTIONS
+            if getattr(options, name, None) is not None}
 
 
 def _choice(prompt: str, choices: list[str], default: str) -> str:
@@ -680,6 +712,7 @@ class SetupWizard:
                 if name == "working_memory_fraction" and options.working_memory_tokens is not None:
                     continue
                 values[name] = default
+        values.update(cost_harness_values(options))
         values["vision_preference"] = options.vision if options.vision is not None else (
             current.vision_preference if current else "auto")
         return values
@@ -712,6 +745,10 @@ class SetupWizard:
 
     @staticmethod
     def _validate_scope(options: SetupOptions) -> None:
+        if options.scope in {"model", "oversight"} and cost_harness_values(options):
+            raise ValueError("The daily limit and its time zone apply to both connections: use configure harness")
+        if options.scope == "harness" and price_values(options):
+            raise ValueError("Prices belong to a connection: use configure model or configure oversight")
         if options.scope == "oversight":
             rejected = [name for name in ("vision", "mandatory_offload", "offload_threshold_percent",
                                           "working_memory_tokens", "auto_repair", "tool_mode")
@@ -905,6 +942,12 @@ class SetupWizard:
             if value is not None:
                 values[name] = value
         values.update(self._harness_values(options, current))
+        if current and changed:
+            # Prices belong to one model on one server.
+            for name in PRICE_FIELDS:
+                values[name] = None
+        if options.scope != "harness":
+            values.update(price_values(options))
         context = options.context_window_tokens
         source = options.context_window_source or ("manual" if context is not None else None)
         if context is None and source is None and not changed and current and current.context_window_source == "manual":
@@ -961,7 +1004,16 @@ class SetupWizard:
                 values.get("request_options") or {}, options.openrouter_provider)
         config = Config(**values)
         make_engine(config, key or None).request_summary()  # Validate before any write.
+        if options.scope != "oversight":
+            self._guard_limit(config)
         return config, key
+
+    @staticmethod
+    def _guard_limit(config: Config) -> None:
+        """Refuse a daily limit that could not be enforced (before any write)."""
+        problem = cost_limit_problem(config)
+        if problem:
+            raise ValueError(problem)
 
     def interactive(self, options: SetupOptions | None = None, *, current: Config | None = None):
         from .setup_ui import interactive_setup
@@ -991,6 +1043,7 @@ class SetupWizard:
 
     def _save_connection(self, config: Config, key: str, options: SetupOptions,
                          current: Config | None = None) -> None:
+        self._guard_limit(config)
         previous = self.paths.secrets.read_bytes() if self.paths.secrets.is_file() else None
         changed_key = bool(key and (self._key(options) or current is None or
                                    (config.provider, config.base_url) != (current.provider, current.base_url)))
@@ -1049,6 +1102,7 @@ class SetupWizard:
                         existing: Config | None, worker: Config) -> None:
         """Save config.json and, when it changed, the oversight key; the key
         goes under its own name in .secrets.json, apart from the worker's."""
+        self._guard_limit(updated)
         oversight = updated.oversight_config()
         previous = self.paths.secrets.read_bytes() if self.paths.secrets.is_file() else None
         secrets = SecretsStore(self.paths)
@@ -1106,6 +1160,10 @@ class SetupWizard:
             built, key, options = self.interactive(options, current=existing)
         else:
             built, key = self._build(options, existing)
+            # Before the verification request: a limit that could not be
+            # enforced with this connection is refused without spending.
+            self._guard_limit(dataclasses.replace(current, oversight_connection={
+                name: getattr(built, name) for name in _config.OVERSIGHT_FIELDS}))
             built = self._verify(options, built, key)
         if (options.stream_responses is None and existing is None
                 and built.adapter in _STREAMING_ADAPTERS and not built.stream_responses):
@@ -1120,10 +1178,101 @@ class SetupWizard:
                      connection_check=self.last_check)
         return updated
 
+    @staticmethod
+    def _cost_only(options: SetupOptions) -> bool:
+        """Only prices, the limit or its zone were given: no connection is touched."""
+        costs = {*COST_PRICE_OPTIONS, *COST_HARNESS_OPTIONS, "scope"}
+        if not (price_values(options) or cost_harness_values(options)):
+            return False
+        return not any(getattr(options, item.name) not in (None, False, [])
+                       for item in dataclasses.fields(options) if item.name not in costs)
+
+    @staticmethod
+    def _price_prompt(prompt: str, current: object) -> object:
+        while True:
+            raw = _ask(prompt, "unset" if current is None else f"{current:g}").strip().lower()
+            if raw in {"unset", "off", "none"}:
+                return None
+            try:
+                value = float(raw.replace(",", ""))
+                if 0 <= value <= 1_000_000:
+                    return value
+            except ValueError:
+                pass
+            print("Enter a price per million tokens (0 for free), or unset.")
+
+    def _edit_costs(self, current: Config) -> tuple[dict, dict, dict]:
+        """Prompt for both connections' prices and the limit; Enter keeps a value."""
+        print("\nPrices are per million tokens, in one currency label, and are used to"
+              " estimate spend (a cost the provider reports replaces the estimate).")
+        print("Enter a number, 0 for a free local model, or 'unset' for unknown.")
+        worker: dict[str, object] = {}
+        oversight: dict[str, object] = {}
+        separate = current.oversight_config()
+        for label, source, target in (("worker", current, worker), ("oversight", separate, oversight)):
+            if source is None:
+                continue
+            print(f"\nPrices of the {label} connection ({source.provider}/{source.model})")
+            target["price_currency"] = _ask("Currency label", source.price_currency)
+            for name, text in (("price_input", "Input"), ("price_cached_input", "Cached input (cache read)"),
+                               ("price_cache_write", "Cache write"), ("price_output", "Output (reasoning included)")):
+                target[name] = self._price_prompt(text, getattr(source, name))
+        harness: dict[str, object] = {}
+        shown = "off" if current.daily_cost_limit is None else f"{current.daily_cost_limit:g}"
+        while True:
+            raw = _ask("\nDaily spend limit for both connections together, or off", shown).strip().lower()
+            if raw in {"off", "none"}:
+                harness["daily_cost_limit"] = None
+                break
+            try:
+                if float(raw.replace(",", "")) > 0:
+                    harness["daily_cost_limit"] = float(raw.replace(",", ""))
+                    break
+            except ValueError:
+                pass
+            print("Enter a positive amount, or off.")
+        harness["cost_day_timezone"] = _clearable(_ask(
+            "Time zone whose midnight ends the day (an IANA name such as Europe/Paris, or local)",
+            current.cost_day_timezone or "local"))
+        return worker, oversight, harness
+
+    def _reconfigure_costs(self, options: SetupOptions, current: Config, *,
+                           interactive: bool) -> Config:
+        """Prices and the limit are settings only: no discovery, no request."""
+        if options.scope == "cost":
+            if not interactive:
+                raise ValueError("configure the costs with --price-* flags on configure model, "
+                                 "configure oversight and --daily-cost-limit on configure harness")
+            worker, oversight, harness = self._edit_costs(current)
+        else:
+            prices = price_values(options)
+            worker = prices if options.scope in {"all", "model"} else {}
+            oversight = prices if options.scope == "oversight" else {}
+            harness = cost_harness_values(options)
+        updated = current
+        if oversight:
+            section = current.oversight_connection
+            if section is None:
+                raise ValueError("No separate oversight connection is configured; set one with "
+                                 "configure oversight --provider ... --model ... first")
+            updated = dataclasses.replace(updated, oversight_connection={**section, **oversight})
+        # Replacing runs the same validation as loading a file.
+        updated = dataclasses.replace(updated, **worker, **harness)
+        self._guard_limit(updated)
+        if interactive and not _yes("Save prices and limit", True):
+            print("No settings changed.")
+            return current
+        self.store.save(updated)
+        Records(self.paths).emit("cost_configuration_updated", **worker, **harness,
+                                 oversight_prices=oversight or None)
+        return updated
+
     def reconfigure(self, options: SetupOptions, *, interactive: bool = False) -> Config:
         self.paths.ensure_layout()
         self._validate_scope(options)
         current = self.store.load()
+        if options.scope == "cost" or self._cost_only(options):
+            return self._reconfigure_costs(options, current, interactive=interactive)
         if options.scope == "oversight":
             return self._reconfigure_oversight(options, current, interactive=interactive)
         if options.scope == "harness":
@@ -1135,6 +1284,7 @@ class SetupWizard:
                 values["vision"] = resolved_vision(current.provider, options.vision,
                                                   {"vision": current.model_supports_vision})
             updated = dataclasses.replace(current, **values)
+            self._guard_limit(updated)
             if interactive and not _yes("Save harness settings", True):
                 print("No settings changed.")
                 return current

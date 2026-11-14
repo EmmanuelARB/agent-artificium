@@ -36,6 +36,7 @@ writes). Never commit them, and never read or print `.secrets.json`.
 | Parsing model output | `life_loop.py` (`parse_life_loop_output`, tolerant tool-call JSON decoding and repair) |
 | Model transport | `engine.py`, `engine_stream.py` (SSE streaming, stall watchdog), `engine_adapters.py`, `engine_native.py` (native tool calling: history replay), `engine_providers.py`, `connection.py`, `oversight_connection.py` (short check of the oversight connection), `discovery.py`, `vision.py` |
 | Context budget | `context_budget.py`, `calibration.py`, `usage.py` |
+| Cost | `cost.py` (prices, provider-reported cost, the per-day `CostLedger`, the 80% / limit status, `CostLimitReached`, `cost_limit_problem`); used by `runtime.py` (`_account_usage`, `_cost_limit_gate`, `_cost_events`, `_start_cost_pause`) |
 | Tools | `tools.py` (registry and dispatch), `tool_schemas.py` (native tool definitions), `tool_files.py`, `tool_memory.py`, `tool_interactions.py`, `tool_review.py` (`request_review`, `consult`), `tool_attention.py` (Infinite Attention), `tool_loader.py` (loads agent-editable tools from `mind/tools/`) |
 | Memory and continuity | `memory.py` (long-term memory, working memory, offloading) |
 | Interactions and events | `interactions.py`, `events.py` |
@@ -95,6 +96,20 @@ writes). Never commit them, and never read or print `.secrets.json`.
   when a section exists, and records `oversight_connection_failed`. Every
   `model_request`/`model_response` record carries `connection` (`worker` or
   `oversight`). Setup reuses `SetupWizard._build` with `scope="oversight"`.
+- **Cost and the daily limit.** Prices are model-section fields
+  (`config.PRICE_FIELDS`, `price_currency`), so the worker and the oversight
+  section each carry their own; `daily_cost_limit` and `cost_day_timezone` are
+  harness fields. `Artificium._account_usage` prices each reply (provider
+  cost, then computed, else unknown) into `logs/runtime/cost-ledger.json`;
+  nothing scans a log. At the limit `_complete` raises `CostLimitReached`
+  before anything is sent (a backstop for oversight, review and consult),
+  `run_turn` ends the turn before claiming anything, and `run_forever` starts
+  a sleep with reason `cost_limit` that `_sleep_active` ends at the reset
+  (messages do not end it) and that skips `Oversight.tick`. Prices and the
+  limit are configured offline (`SetupWizard._reconfigure_costs`) and a limit
+  that cannot be enforced is refused (`cost.cost_limit_problem`). The state
+  header's `{{cost_line}}` is an optional placeholder (`prompts.OPTIONAL_VALUES`)
+  so an older runtime overlay keeps rendering.
 - **Tools.** A model-facing tool needs: its handler registered in
   `tools.py` (`self._functions`), a canonical example and accepted arguments
   there, and an entry in `prompts/tools/core_tools.md`. Native tool calling

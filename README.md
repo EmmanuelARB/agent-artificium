@@ -563,6 +563,10 @@ A few advanced settings have no CLI flag. Edit them in `config.json`, then resta
 | `harness.evaluation_interval_hours` | `24` | How often a fresh-context reviewer judges whether the work advances; a stalled-blocker notice brings it forward. `0` turns it off. |
 | `harness.idle_wake_hours` | `6` | A sleep with no scheduled task, timer, or pending default wakes after this long. `0` turns it off. |
 | `harness.oversight_model` | `null` | A different model name on the worker's endpoint and key for the oversight requests. Used only when there is no `oversight` section; if both are present, the section wins. |
+| `model.price_input`, `price_cached_input`, `price_cache_write`, `price_output` | `null` | The connection's prices per million tokens (cache read, cache write and output; `null` is unknown). The `oversight` section carries its own (see "Cost and the daily limit"). |
+| `model.price_currency` | `"USD"` | A label shown with the prices and spend; nothing is converted. |
+| `harness.daily_cost_limit` | `null` | Spend per day, in the prices' currency, over the worker and oversight connections together; `null` is no limit. |
+| `harness.cost_day_timezone` | `null` | IANA zone (such as `Europe/Paris`) whose midnight ends the day; `null` is this machine's zone. |
 | `model.request_options` | `{}` | Extra request fields verified against your server, such as `chat_template_kwargs`. They cannot replace protected prompt/model fields or conflict with normalized controls. Never put credentials here. |
 
 ### Oversight
@@ -595,6 +599,26 @@ python3 artificium.py restart
 ```
 
 `configure oversight` takes the same connection flags as `configure model` (`--provider`, `--model`, `--api-url`, `--api-key-file`, `--context-window`, `--reasoning`, sampling and timeout flags) and reuses the provider presets, model discovery, and context-window detection; plain `configure` in a terminal offers it in a menu. Setting it checks the connection with a short real request (not the life-loop prompt) and saves nothing if that fails. Its key is saved in `.secrets.json` apart from the worker's, bound to its provider and address, and a running agent picks up a replaced key without a restart. The environment can supply it too: `ARTIFICIUM_OVERSIGHT_API_KEY`, then the provider's standard variable; `ARTIFICIUM_API_KEY` belongs to the worker and is not used. A connection to the very server the worker uses shares the worker's key unless given its own. `status` and `doctor` show the connection (never a key), and `doctor --live` checks it. Choose a context window large enough for an evaluation (the checkpoint history plus recent checkpoints); a request that does not fit fails with an error and is not retried against the worker. Changing the worker with `configure model` or `configure harness` leaves the oversight connection as it is.
+
+### Cost and the daily limit
+
+Every model request is priced and added to a per-day ledger (`workspace/logs/runtime/cost-ledger.json`, the last 60 days, kept per connection: requests, tokens by kind, cost, and requests whose cost is unknown). Each connection has its own prices, per million tokens: input, cached input (cache read), cache write and output, plus a currency label. Reasoning tokens are billed as output. A cost the provider reports in the response (OpenRouter's `usage.cost`) replaces the computed one, and `model_response` records the cost with its source: `reported`, `computed` or `unknown`. Without prices, tokens are still counted and the cost is unknown. A request that failed but whose response reported usage is counted too.
+
+```bash
+python3 artificium.py configure model --price-input 3 --price-cached-input 0.3 --price-cache-write 3.75 --price-output 15
+python3 artificium.py configure oversight --price-input 15 --price-output 75      # the oversight connection's own prices
+python3 artificium.py configure harness --daily-cost-limit 20 --cost-day-timezone Europe/Paris
+python3 artificium.py cost            # today and the last days, per connection; --days N, --json
+```
+
+These flags change settings only: no discovery and no model request. `off` clears a value (`local` for the time zone), and plain `configure` in a terminal offers a "Prices and the daily cost limit" menu. `status` shows today's spend, and the agent sees one line of it in its state header (`Spend today: 12.40 of 20.00 USD limit (62%)`; without a limit, only when prices or reported costs exist).
+
+**The limit** covers both connections together and the day ends at local midnight in `cost_day_timezone`. A limit is refused unless every connection it covers has prices (use `0` for a free local model) or is on a provider that reports costs, and unless their currency labels agree; the message says what to set. The oversight model named by `oversight_model` has no prices of its own, so give oversight a connection (or clear it) first.
+
+- At 80% the agent gets one notice per day: what was spent and what remains, and that requests stop at the limit until the reset time, so it should wrap up and checkpoint.
+- At the limit no request is sent, from either connection. The instance sleeps until the reset (`status` shows it held, `watch` a `[cost]` line, `state.json` says `cost_limited` with the reset time, and `cost_limit_reached` is recorded in `lifetime.jsonl`). Messages and notifications keep arriving and stay queued, nothing is marked handled; due oversight checks wait. At the reset it resumes by itself and the agent is told it was held. A request already in flight when the limit is crossed finishes, so the day can end somewhat over the limit. To go on sooner, raise or remove the limit and `restart`.
+
+Caveats. A computed cost is an estimate from the prices you entered; check them against your provider. Cached-token pricing differs by provider (some bill cache reads at a fraction, some charge for cache writes, some do neither); a cache price left unset bills those tokens as ordinary input, which never understates. A request that reports no usage counts as unknown cost, and so does one on a connection without prices, so the limit does not see it. Spend is recorded by this instance only, not by other users of the same key.
 
 ### Context budget and offloading
 
@@ -874,6 +898,7 @@ Memory, attachments, backups, logs, and raw model requests may contain private d
 
 | Symptom | Next step |
 |---|---|
+| Requests are held and `status` says "daily cost limit" | Spend reached `daily_cost_limit`; `python3 artificium.py cost` shows the reset time. Raise or remove the limit and `restart` to go on sooner. |
 | Setup or model requests fail | `connect` to repair the connection, or `check` to test it without changing settings. |
 | HTTP 401 or 403 | 401: check credentials, and use `key` to replace one. 403: check endpoint, permissions, and any proxy. |
 | Local server reports insufficient context | Increase the server's real allocation if the hardware allows, then reconnect; otherwise shrink the prompt and context footprint. |
