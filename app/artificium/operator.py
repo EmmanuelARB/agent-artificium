@@ -60,8 +60,9 @@ def _oversight_summary(paths: Paths, config: Any) -> dict[str, Any] | None:
                 "context_window_tokens": separate.context_window_tokens,
                 "api_key_missing": bool(requires_api_key(separate.provider, separate.adapter) and not key),
                 "separate_connection": True}
-    if config is not None and config.oversight_model and config.oversight_model != config.model:
-        return {"provider": config.provider, "model": config.oversight_model,
+    legacy = getattr(config, "oversight_model", None)
+    if legacy and legacy != config.model:
+        return {"provider": config.provider, "model": legacy,
                 "separate_connection": False}
     return None
 

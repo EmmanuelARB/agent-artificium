@@ -474,7 +474,7 @@ For llama.cpp, discovery reads `/v1/models` and `/props?model=ID`: `default_gene
 
 Use the masked setup prompt, `--api-key-file /path/to/key`, `ARTIFICIUM_API_KEY`, or the provider variable: `LLAMA_API_KEY`, `OLLAMA_API_KEY`, `VLLM_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY`. Avoid typing a secret directly into a shell command.
 
-Saved keys live in `.secrets.json` in the project folder (mode 0600). Git ignores it and it sits outside `workspace/`, so it survives upgrades and resets. An explicitly saved key takes precedence, so runtime uses the key that passed verification. Otherwise `ARTIFICIUM_API_KEY` comes before the provider variable and the saved fallback. Saved keys are bound to provider and address. `key` verifies a replacement before saving it, and a running agent reloads it. The agent can read its key; apply the spending controls from Quick start.
+Saved keys live in `.secrets.json` in the project folder (mode 0600); the oversight connection's key (see "Oversight connection") is stored there under its own name, apart from the worker's. Git ignores it and it sits outside `workspace/`, so it survives upgrades and resets. An explicitly saved key takes precedence, so runtime uses the key that passed verification. Otherwise `ARTIFICIUM_API_KEY` comes before the provider variable and the saved fallback. Saved keys are bound to provider and address. `key` verifies a replacement before saving it, and a running agent reloads it. The agent can read its key; apply the spending controls from Quick start.
 
 `doctor` shows the adapter, exact URL, safe header names, and request parameters without inference. `check` (same as `doctor --live`) sends a real diagnostic request with the complete prompt pack, pinned mind, and saved working context, plus an image check where applicable. It does not start the agent, import mutable tools, consume pending events, or keep the response. Setup and reconnection use the same check before saving.
 
@@ -528,7 +528,7 @@ python3 artificium.py configure model --custom-contract none --url http://localh
 <details>
 <summary><strong>Configuration: context, offloading, vision, and generation controls</strong></summary>
 
-Settings live in `config.json` in the project folder (ignored by Git), saved atomically, with a `harness` and a `model` section. Every save writes every setting, defaults included, so a saved file keeps its meaning when a later release changes a default; a setting missing from the file takes the current default. Inspect them with `config`, `config harness`, or `config model`. Change harness preferences offline with `configure harness`; use `connect` or `configure model` for a verified model change. Configuration changes take effect after `restart`; a replaced API key reloads on its own.
+Settings live in `config.json` in the project folder (ignored by Git), saved atomically, with a `harness` and a `model` section, and an optional `oversight` section (see "Oversight connection"). Every save writes every setting, defaults included, so a saved file keeps its meaning when a later release changes a default; a setting missing from the file takes the current default. Inspect them with `config`, `config harness`, `config model`, or `config oversight`. Change harness preferences offline with `configure harness`; use `connect` or `configure model` for a verified model change. Configuration changes take effect after `restart`; a replaced API key reloads on its own.
 
 ```bash
 python3 artificium.py configure harness --vision auto
@@ -562,7 +562,7 @@ A few advanced settings have no CLI flag. Edit them in `config.json`, then resta
 | `harness.decision_default_hours` | `24` | How long a decision's proposed default waits for you before the harness checks it (see "Oversight"). `0` turns defaults off. |
 | `harness.evaluation_interval_hours` | `24` | How often a fresh-context reviewer judges whether the work advances; a stalled-blocker notice brings it forward. `0` turns it off. |
 | `harness.idle_wake_hours` | `6` | A sleep with no scheduled task, timer, or pending default wakes after this long. `0` turns it off. |
-| `harness.oversight_model` | `null` | A different model name on the same endpoint for the checks above, so they do not share the agent's blind spots. |
+| `harness.oversight_model` | `null` | A different model name on the worker's endpoint and key for the oversight requests. Used only when there is no `oversight` section; if both are present, the section wins. |
 | `model.request_options` | `{}` | Extra request fields verified against your server, such as `chat_template_kwargs`. They cannot replace protected prompt/model fields or conflict with normalized controls. Never put credentials here. |
 
 ### Oversight
@@ -574,7 +574,27 @@ Four mechanisms keep a long run from drifting or waiting on you without anyone n
 - **Measure.** A checkpoint may carry one `measure`: an observable value that would change if the objective advanced. The stall notice and the evaluation show its trend, including when it has not moved across several checkpoints whose label said `advanced`.
 - **Idle fallback and cadence.** A sleep until an event, with no scheduled task and no pending default, wakes after `idle_wake_hours` and tells the agent what is waiting. Four plain messages in six hours without a reply from you earn the agent a reminder to batch updates.
 
-These checks are ordinary logged inferences. `oversight_model` lets them use another model on the same endpoint. A process found to have died without a clean stop is recorded at the next start as `previous_run_ended_uncleanly` (pid, last activity), and `watch` shows it.
+These checks are ordinary logged inferences. By default they use the worker's model; `oversight_model` names another model on the same endpoint, and the oversight connection (below) gives them a complete connection of their own. A process found to have died without a clean stop is recorded at the next start as `previous_run_ended_uncleanly` (pid, last activity), and `watch` shows it.
+
+### Oversight connection
+
+A long run is cheapest with a modest worker model doing the work and a stronger, costlier model consulted only rarely. The optional `oversight` section of `config.json` is a complete second connection (provider, model, address, adapter, headers, request options, context window, reasoning and sampling settings, timeouts, streaming: the fields of the `model` section except `tool_mode`, since oversight requests carry no tools). It can be on another provider than the worker, for example a hosted Claude or Mistral model over a local or hosted Qwen worker. It serves, and only serves:
+
+- the periodic evaluation and the decision-default check (see above);
+- `request_review`;
+- the `consult` tool, with which the agent puts a major question (a plan, a change of strategy, a hard decision, a diagnosis it is stuck on) to it in a fresh context.
+
+Without an `oversight` section these requests go to the worker's model, or to `harness.oversight_model` on the worker's endpoint, exactly as before. When a section is present it wins over `oversight_model`, and its requests are never silently sent to the worker if it fails: the checks retry and give up without stopping the life-loop, and `request_review` and `consult` return an error that says what failed and that the agent can continue. Token counts and budgets use the oversight connection's own context window, and each request's `model_request` and `model_response` records in `lifetime.jsonl` (and the exchange log) carry `connection`, `worker` or `oversight`, so the two can be priced separately. **The oversight connection is billed by its own provider, on its own key, separately from the worker.**
+
+```bash
+python3 artificium.py configure oversight --provider anthropic --model MODEL --api-key-file ~/oversight.key
+python3 artificium.py configure oversight --provider vllm --api-url http://gpu-box:8000 --model MODEL
+python3 artificium.py configure oversight --check      # one short real request; changes nothing
+python3 artificium.py configure oversight --off        # remove the connection and its key
+python3 artificium.py restart
+```
+
+`configure oversight` takes the same connection flags as `configure model` (`--provider`, `--model`, `--api-url`, `--api-key-file`, `--context-window`, `--reasoning`, sampling and timeout flags) and reuses the provider presets, model discovery, and context-window detection; plain `configure` in a terminal offers it in a menu. Setting it checks the connection with a short real request (not the life-loop prompt) and saves nothing if that fails. Its key is saved in `.secrets.json` apart from the worker's, bound to its provider and address, and a running agent picks up a replaced key without a restart. The environment can supply it too: `ARTIFICIUM_OVERSIGHT_API_KEY`, then the provider's standard variable; `ARTIFICIUM_API_KEY` belongs to the worker and is not used. A connection to the very server the worker uses shares the worker's key unless given its own. `status` and `doctor` show the connection (never a key), and `doctor --live` checks it. Choose a context window large enough for an evaluation (the checkpoint history plus recent checkpoints); a request that does not fit fails with an error and is not retried against the worker. Changing the worker with `configure model` or `configure harness` leaves the oversight connection as it is.
 
 ### Context budget and offloading
 
@@ -648,7 +668,8 @@ Run commands as `python3 artificium.py COMMAND`, from any directory; the launche
 | `notify` | Queue a generic notification. |
 | `attention` | Queue an Infinite Attention request for a source and an objective. |
 | `configure harness` / `configure model` / `connect` | Change harness preferences or the model connection. |
-| `config` | Show saved settings; add `harness` or `model` for one section. |
+| `configure oversight` | Set, change, `--check`, or `--off` the oversight connection (see "Oversight connection"). |
+| `config` | Show saved settings; add `harness`, `model`, or `oversight` for one section. |
 | `models` | Discover served models without inference. |
 | `doctor` / `check` | Inspect the request mapping, or test the complete connection. |
 | `key` | Verify and save a replacement API key. |
@@ -735,7 +756,7 @@ Continuous operation has no lifetime work budget. Repeated identical no-action o
 | `app/seed/` | The starting mind, copied into `workspace/mind/` on first start. |
 | `app/tests/` | Offline tests. |
 | `config.json` | Model connection and harness settings. Ignored by Git; survives upgrades and resets. |
-| `.secrets.json` | Saved API key, mode 0600. Ignored by Git; survives upgrades and resets. |
+| `.secrets.json` | Saved API keys (the worker's, and the oversight connection's when it has its own), mode 0600. Ignored by Git; survives upgrades and resets. |
 | `workspace/` | Everything the agent writes. Ignored by Git; deleting it resets the agent. |
 | `workspace/mind/self.txt` | Mutable identity, purpose, and initiative. |
 | `workspace/mind/meta_memory.md` | Pinned essential knowledge, memory map, and tool registry. |
@@ -764,13 +785,15 @@ These are model-facing tools, not CLI commands. The [tool contract](app/prompts/
 | Continuity and identity | `offload_working_memory`, `revise_self`, `finish_initialization`, `sleep` |
 | Interactions | `list_interactions`, `read_interaction_event`, `set_interaction_event_status`, `send_interaction` |
 | Standing directives | `record_directive`, `retire_directive` |
-| Independent review | `request_review` |
+| Independent review and advice | `request_review`, `consult` |
 | Scheduling | `schedule_task`, `list_scheduled_tasks`, `cancel_scheduled_task` |
 | Infinite Attention | `open_attention`, `checkpoint_attention`, `next_attention_chunk`, `refine_attention`, `complete_attention`, `list_attention_streams` |
 
 A directive is a lasting instruction from an entity, stored as its exact words from the cited inbound event (a paraphrase is refused) in `logs/runtime/directives.json`. With `source_path`, the quote can come from a file that event names, such as a task brief, so the brief's working rules stay in front of the agent through every offload; if the file later stops containing the quote, the directive is marked instead of dropped. When the agent reads a message that names workspace files (in the workspace root, `mind/space/`, or a path written out), it is told once which files those are and asked to record any brief's standing rules this way; the notice stops once a directive quotes the file. Active directives are shown after the pinned mind on every request, and only a later event from the same entity can retire one. The block is absent while there are none.
 
-`request_review` sends a claim, the evidence files the agent names, its stated constraints, and the active directives to the same model in a fresh context that contains none of the working memory. The reviewer answers with a verdict, the strongest reasons for doubt, and the cheapest check that would settle them. Each review is one ordinary, logged inference; it is withheld while a mandatory offload is pending.
+`request_review` sends a claim, the evidence files the agent names, its stated constraints, and the active directives to the same model in a fresh context that contains none of the working memory. The reviewer answers with a verdict, the strongest reasons for doubt, and the cheapest check that would settle them. Each review is one ordinary, logged inference; it is withheld while a mandatory offload is pending. It goes to the oversight connection when one is configured, and otherwise to the worker's model.
+
+`consult` puts a major question to the oversight model in a fresh context: the agent's `question` (required), optional `evidence_paths` (bounded file contents, sized to the oversight model's window, as for `request_review`), and optional free-text `context`. The model also sees the entity's standing directives and its first and latest messages, so its advice respects what was asked, but none of the agent's working memory. The answer comes back as the tool result, advice to weigh rather than authority. It is meant for major decisions, not routine steps, because the oversight model is usually the costlier one; with no `oversight` connection it is the worker's model in a fresh context. If the connection fails, the tool returns an error saying so and the agent continues without it.
 
 `load_attachment` and `compact_context` remain as compatibility operations; `load_images`, text reads, and `offload_working_memory` replace them.
 

@@ -37,7 +37,7 @@ from .setup import (
 
 
 def _setup_options(args: argparse.Namespace) -> SetupOptions:
-    return SetupOptions(
+    options = SetupOptions(
         scope=getattr(args, "scope", None) or "all",
         provider=getattr(args, "provider", None),
         model=getattr(args, "model", None),
@@ -78,10 +78,13 @@ def _setup_options(args: argparse.Namespace) -> SetupOptions:
         offload_threshold_percent=getattr(args, "offload_threshold", None),
         working_memory_tokens=getattr(args, "working_memory_tokens", None),
         auto_repair=(getattr(args, "auto_repair") == "on" if getattr(args, "auto_repair", None) is not None else None),
-        oversight_off=bool(getattr(args, "off", False)),
-        oversight_check=bool(getattr(args, "check", False)),
         force=bool(getattr(args, "force", False)),
     )
+    # Set afterwards, not as constructor arguments: a workspace overlay of
+    # setup.py written before the oversight connection has no such fields.
+    options.oversight_off = bool(getattr(args, "off", False))
+    options.oversight_check = bool(getattr(args, "check", False))
+    return options
 
 
 def _can_setup_noninteractive(options: SetupOptions) -> bool:

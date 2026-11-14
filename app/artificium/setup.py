@@ -46,7 +46,8 @@ from .filesystem import Paths, atomic_write_text
 from .initialization import initialize_mind, render_self
 from .prompts import PromptPack
 from .records import Records
-from .connection import verify_connection, verify_oversight_connection
+from .connection import verify_connection
+from .oversight_connection import verify_oversight_connection
 
 
 @dataclass

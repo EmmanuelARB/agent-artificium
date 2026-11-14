@@ -18,7 +18,8 @@ from .config import (
     requires_api_key,
 )
 from .engine import EngineError, make_engine
-from .connection import verify_connection, verify_oversight_connection
+from .connection import verify_connection
+from .oversight_connection import verify_oversight_connection
 from .filesystem import json_dumps
 from .interactions import ArtificiumClient
 from .prompts import PromptPack
@@ -552,7 +553,8 @@ def _dispatch(argv: list[str] | None = None) -> int:
                         else None
                     ),
                 }
-            oversight = config.oversight_config()
+            separate = getattr(config, "oversight_config", None)
+            oversight = separate() if callable(separate) else None
             if oversight is not None:
                 oversight_key = SecretsStore(paths).resolve_oversight_key(oversight, config)
                 result["oversight"] = {
@@ -568,7 +570,7 @@ def _dispatch(argv: list[str] | None = None) -> int:
                     "api_key_available": bool(oversight_key),
                     "engine_request": make_engine(oversight, oversight_key).request_summary(),
                 }
-            elif config.oversight_model:
+            elif getattr(config, "oversight_model", None):
                 result["oversight"] = {"model": config.oversight_model,
                                        "note": "another model on the worker's endpoint and key"}
             if args.live:
