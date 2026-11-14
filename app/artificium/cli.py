@@ -18,7 +18,7 @@ from .config import (
     requires_api_key,
 )
 from .engine import EngineError, make_engine
-from .connection import verify_connection
+from .connection import verify_connection, verify_oversight_connection
 from .filesystem import json_dumps
 from .interactions import ArtificiumClient
 from .prompts import PromptPack
@@ -157,9 +157,12 @@ def _setup_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _configure_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("scope", nargs="?", choices=["harness", "model"], help="Edit one settings group; omitted accepts legacy combined flags")
+    parser.add_argument("scope", nargs="?", choices=["harness", "model", "oversight"], help="Edit one settings group; omitted accepts legacy combined flags. oversight is a second model connection for periodic checks, request_review and consult (same connection flags; its key is stored separately)")
     _harness_arguments(parser)
     _connection_arguments(parser)
+    group = parser.add_argument_group("oversight settings (configure oversight)")
+    group.add_argument("--off", action="store_true", help="Remove the oversight connection and its key")
+    group.add_argument("--check", action="store_true", help="Test the saved oversight connection with a short real request; changes nothing")
     parser.add_argument("--reset-generation-settings", action="store_true", help="Clear explicit generation controls before applying flags")
     parser.add_argument("--yes", action="store_true", help="Use supplied values without prompts; still verify model changes")
 
@@ -299,7 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("status", help="Read-only runtime summary").add_argument("--json", action="store_true", help="Machine-readable detailed state")
     models = commands.add_parser("models", help="List served models without inference")
     _connection_arguments(models, runtime_settings=False)
-    commands.add_parser("config", help="Show saved configuration groups").add_argument("section", nargs="?", choices=["harness", "model"])
+    commands.add_parser("config", help="Show saved configuration groups").add_argument("section", nargs="?", choices=["harness", "model", "oversight"])
     configure = commands.add_parser(
         "configure",
         aliases=["reconfigure"],
@@ -491,7 +494,7 @@ def _dispatch(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "config":
             grouped = store.load().grouped_dict()
-            print(json_dumps(grouped[args.section] if args.section else grouped, pretty=True))
+            print(json_dumps(grouped.get(args.section) if args.section else grouped, pretty=True))
             return 0
         if args.command in {"doctor", "check"}:
             config = store.load()
@@ -549,6 +552,25 @@ def _dispatch(argv: list[str] | None = None) -> int:
                         else None
                     ),
                 }
+            oversight = config.oversight_config()
+            if oversight is not None:
+                oversight_key = SecretsStore(paths).resolve_oversight_key(oversight, config)
+                result["oversight"] = {
+                    "provider": oversight.provider,
+                    "model": oversight.model,
+                    "adapter": oversight.adapter,
+                    "api_base_url": oversight.base_url,
+                    "context_window_tokens": oversight.context_window_tokens,
+                    "api_key_required": (
+                        requires_api_key(oversight.provider, oversight.adapter)
+                        or custom_contract_requires_api_key(oversight.custom_contract)
+                    ),
+                    "api_key_available": bool(oversight_key),
+                    "engine_request": make_engine(oversight, oversight_key).request_summary(),
+                }
+            elif config.oversight_model:
+                result["oversight"] = {"model": config.oversight_model,
+                                       "note": "another model on the worker's endpoint and key"}
             if args.live:
                 # Resolve metadata exactly as setup does, but never save or run
                 # the agent while diagnosing an existing instance.
@@ -557,6 +579,10 @@ def _dispatch(argv: list[str] | None = None) -> int:
                 _, check_result = verify_connection(paths, candidate, candidate_key or None,
                                                      report=lambda text: print(text, file=sys.stderr))
                 result["connection_check"] = check_result
+                if oversight is not None:
+                    result["oversight"]["connection_check"] = verify_oversight_connection(
+                        oversight, oversight_key,
+                        report=lambda text: print(text, file=sys.stderr))
             print(json_dumps(result, pretty=True))
             return 0
         if args.command == "logs":

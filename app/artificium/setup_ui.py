@@ -118,7 +118,8 @@ def model_editor(wizard, options: SetupOptions, current: Config | None) -> None:
         print(f"  7. Stream responses: {'on' if config.stream_responses else 'off'}")
         if config.provider == "openrouter":
             print("  8. Inference provider routing")
-        print(f"  9. Tool calling: {config.tool_mode}")
+        if options.scope != "oversight":
+            print(f"  9. Tool calling: {config.tool_mode}")
         print("  reset. Restore generation defaults")
         action = _ask("Setting number or done", "done").lower()
         if action in {"done", "back"}:
@@ -140,7 +141,7 @@ def model_editor(wizard, options: SetupOptions, current: Config | None) -> None:
             edit_stream_responses(options, config)
         elif action == "8" and config.provider == "openrouter":
             options.openrouter_provider = _ask("Inference provider slug, or automatic", configured_openrouter_provider(config.request_options) or "automatic")
-        elif action == "9":
+        elif action == "9" and options.scope != "oversight":
             edit_tool_mode(options, config)
         elif action == "reset":
             wizard._clear_generation(options)
@@ -150,13 +151,14 @@ def model_editor(wizard, options: SetupOptions, current: Config | None) -> None:
 
 def interactive_setup(wizard, options: SetupOptions | None = None, *, current: Config | None = None):
     options = copy.deepcopy(options or SetupOptions())
-    if options.scope != "model":
+    oversight = options.scope == "oversight"
+    if options.scope not in {"model", "oversight"}:
         wizard._edit_harness(options, current)
     settings_reviewed = False
     config = None
     while True:
         try:
-            print("\nModel connection")
+            print("\nOversight connection" if oversight else "\nModel connection")
             if not options.provider:
                 options.provider = choose_provider(current.provider if current else "openrouter")
             same = current is not None and current.provider == options.provider
@@ -201,7 +203,8 @@ def interactive_setup(wizard, options: SetupOptions | None = None, *, current: C
                 config, key = wizard._build(options, current)
             print(f"\n{config.model} · context {config.context_window_tokens:,} · reasoning {reasoning_label(config)}")
             print(f"API: {config.base_url}/{config.endpoint}")
-            print(f"Images: {config.vision_preference}; the connection check verifies support.")
+            if not oversight:
+                print(f"Images: {config.vision_preference}; the connection check verifies support.")
             if not _yes("Check connection and save", True):
                 model_editor(wizard, options, current)
                 continue

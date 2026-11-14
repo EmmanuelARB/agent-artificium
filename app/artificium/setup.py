@@ -46,7 +46,7 @@ from .filesystem import Paths, atomic_write_text
 from .initialization import initialize_mind, render_self
 from .prompts import PromptPack
 from .records import Records
-from .connection import verify_connection
+from .connection import verify_connection, verify_oversight_connection
 
 
 @dataclass
@@ -97,6 +97,9 @@ class SetupOptions:
     offload_threshold_percent: float | None = None
     working_memory_tokens: str | None = None
     auto_repair: bool | None = None
+    # configure oversight: remove the connection, or only test the saved one.
+    oversight_off: bool = False
+    oversight_check: bool = False
     force: bool = False
 
 
@@ -708,6 +711,16 @@ class SetupWizard:
 
     @staticmethod
     def _validate_scope(options: SetupOptions) -> None:
+        if options.scope == "oversight":
+            rejected = [name for name in ("vision", "mandatory_offload", "offload_threshold_percent",
+                                          "working_memory_tokens", "auto_repair", "tool_mode")
+                        if getattr(options, name) is not None]
+            if rejected:
+                raise ValueError("Settings that do not apply to the oversight connection: "
+                                 + ", ".join(rejected) + ". Use configure harness or configure model")
+            if options.oversight_off and options.oversight_check:
+                raise ValueError("Use --off or --check, not both")
+            return
         if options.scope == "model" and any(
             getattr(options, name) is not None for name in ("vision", "mandatory_offload", "offload_threshold_percent", "working_memory_tokens", "auto_repair")
         ):
@@ -747,6 +760,8 @@ class SetupWizard:
         explicit = self._key(options)
         if explicit:
             return explicit
+        if options.scope == "oversight":
+            return self._oversight_credential(provider, current, base)
         if current is not None and current.provider == provider and current.base_url == base:
             return SecretsStore(self.paths).resolve_api_key(current) or ""
         preset = PROVIDERS.get(provider)
@@ -755,6 +770,23 @@ class SetupWizard:
         )
         if environment:
             return environment.strip()
+        return ""
+
+    def _oversight_credential(self, provider: str, current: Config | None, base: str) -> str:
+        """The oversight connection has its own key; ARTIFICIUM_API_KEY is the
+        worker's. Only the very server the worker uses shares its key."""
+        secrets = SecretsStore(self.paths)
+        worker = self.store.load() if self.store.exists() else None
+        if current is not None and current.provider == provider and current.base_url == base:
+            found = secrets.resolve_oversight_key(current, worker)
+            if found:
+                return found
+        preset = PROVIDERS.get(provider)
+        for variable in ("ARTIFICIUM_OVERSIGHT_API_KEY", preset.key_environment if preset else None):
+            if variable and os.getenv(variable):
+                return os.getenv(variable).strip()
+        if worker is not None and (worker.provider, worker.base_url) == (provider, base):
+            return secrets.resolve_api_key(worker) or ""
         return ""
 
     def _probe(self, provider: str, base: str, key: str, headers: dict | None = None) -> ModelDiscovery:
@@ -947,6 +979,10 @@ class SetupWizard:
         return None
 
     def _verify(self, options: SetupOptions, config: Config, key: str) -> Config:
+        if options.scope == "oversight":
+            # Short text request: oversight sends no tools, images or mind.
+            self.last_check = verify_oversight_connection(config, key or None)
+            return config
         verified, result = verify_connection(self.paths, config, key or None,
                                              self_directive=self._directive(options))
         self.last_check = result
@@ -1008,10 +1044,87 @@ class SetupWizard:
                 "context_window_tokens": str(config.context_window_tokens),
                 "reasoning_effort": reasoning_label(config), "vision": config.vision}
 
+    def _save_oversight(self, updated: Config, key: str, options: SetupOptions,
+                        existing: Config | None, worker: Config) -> None:
+        """Save config.json and, when it changed, the oversight key; the key
+        goes under its own name in .secrets.json, apart from the worker's."""
+        oversight = updated.oversight_config()
+        previous = self.paths.secrets.read_bytes() if self.paths.secrets.is_file() else None
+        secrets = SecretsStore(self.paths)
+        explicit = bool(self._key(options))
+        server_changed = existing is None or (oversight.provider, oversight.base_url) != (
+            existing.provider, existing.base_url)
+        # The very server the worker uses, with its key: nothing to duplicate.
+        shared = (not explicit and (worker.provider, worker.base_url) == (
+            oversight.provider, oversight.base_url) and key == (secrets.resolve_api_key(worker) or ""))
+        try:
+            if key and (explicit or server_changed) and not shared:
+                secrets.save_oversight_api_key(key, provider=oversight.provider,
+                                               base_url=oversight.base_url, preferred=explicit)
+            elif server_changed:
+                secrets.remove_oversight_api_key()
+            self.store.save(updated)
+        except OSError:
+            if previous is None:
+                self.paths.secrets.unlink(missing_ok=True)
+            else:
+                atomic_write_text(self.paths.secrets, previous.decode("utf-8"), mode=0o600)
+            raise
+
+    def _reconfigure_oversight(self, options: SetupOptions, current: Config, *,
+                               interactive: bool) -> Config:
+        """Set, change, check or remove the oversight connection."""
+        existing = current.oversight_config()
+        records = Records(self.paths)
+        if interactive and existing is not None:
+            print(f"\nOversight connection: {existing.provider}/{existing.model}")
+            action = _choice("Change, check, remove, or cancel", ["change", "check", "remove", "cancel"], "cancel")
+            if action == "cancel":
+                print("No settings changed.")
+                return current
+            options.oversight_off, options.oversight_check = action == "remove", action == "check"
+        if options.oversight_off:
+            if existing is None:
+                return current
+            updated = dataclasses.replace(current, oversight_connection=None)
+            self.store.save(updated)
+            SecretsStore(self.paths).remove_oversight_api_key()
+            records.emit("oversight_connection_removed", provider=existing.provider, model=existing.model)
+            return updated
+        if options.oversight_check:
+            if existing is None:
+                raise ValueError("No separate oversight connection is configured; set one with configure oversight --provider ... --model ...")
+            key = SecretsStore(self.paths).resolve_oversight_key(existing, current) or ""
+            if (requires_api_key(existing.provider, existing.adapter)
+                    or custom_contract_requires_api_key(existing.custom_contract)) and not key:
+                raise ValueError(f"No API key found for the oversight connection ({existing.provider}); "
+                                 "set one with configure oversight --api-key-file FILE")
+            self._verify(options, existing, key)
+            return current
+        if interactive:
+            built, key, options = self.interactive(options, current=existing)
+        else:
+            built, key = self._build(options, existing)
+            built = self._verify(options, built, key)
+        if (options.stream_responses is None and existing is None
+                and built.adapter in _STREAMING_ADAPTERS and not built.stream_responses):
+            # Same policy as a new worker setup; see run().
+            built = dataclasses.replace(built, stream_responses=True)
+        updated = dataclasses.replace(current, oversight_connection={
+            name: getattr(built, name) for name in _config.OVERSIGHT_FIELDS})
+        self._save_oversight(updated, key, options, existing, current)
+        oversight = updated.oversight_config()
+        records.emit("oversight_connection_updated", provider=oversight.provider,
+                     model=oversight.model, context_window_tokens=oversight.context_window_tokens,
+                     connection_check=self.last_check)
+        return updated
+
     def reconfigure(self, options: SetupOptions, *, interactive: bool = False) -> Config:
         self.paths.ensure_layout()
         self._validate_scope(options)
         current = self.store.load()
+        if options.scope == "oversight":
+            return self._reconfigure_oversight(options, current, interactive=interactive)
         if options.scope == "harness":
             # Harness edits work offline, without credentials or model discovery.
             if interactive:

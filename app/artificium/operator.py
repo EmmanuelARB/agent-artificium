@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .config import ConfigStore
+from .config import ConfigStore, SecretsStore, requires_api_key
 from .filesystem import Paths, read_json, read_jsonl
 from .memory import TokenEstimator
 
@@ -50,6 +50,22 @@ def process_state(paths: Paths) -> dict[str, Any]:
             "started_at": state.get("started_at"), "lock_path": str(paths.process_lock)}
 
 
+def _oversight_summary(paths: Paths, config: Any) -> dict[str, Any] | None:
+    """Which model serves oversight requests; never any key, only whether one is found."""
+    build = getattr(config, "oversight_config", None)
+    separate = build() if callable(build) else None
+    if separate is not None:
+        key = SecretsStore(paths).resolve_oversight_key(separate, config)
+        return {"provider": separate.provider, "model": separate.model,
+                "context_window_tokens": separate.context_window_tokens,
+                "api_key_missing": bool(requires_api_key(separate.provider, separate.adapter) and not key),
+                "separate_connection": True}
+    if config is not None and config.oversight_model and config.oversight_model != config.model:
+        return {"provider": config.provider, "model": config.oversight_model,
+                "separate_connection": False}
+    return None
+
+
 def status_snapshot(paths: Paths) -> dict[str, Any]:
     config = ConfigStore(paths).load() if paths.config.is_file() else None
     process = process_state(paths)
@@ -64,6 +80,7 @@ def status_snapshot(paths: Paths) -> dict[str, Any]:
     meta = paths.meta_memory.read_text(encoding="utf-8") if paths.meta_memory.is_file() else ""
     visual = read_json(paths.visual_context, {})
     return {
+        "oversight": _oversight_summary(paths, config),
         "configured": config is not None, "root": str(paths.root), "process": process,
         "provider": config.provider if config else None, "model": config.model if config else None,
         "context_window_tokens": config.context_window_tokens if config else None,
@@ -84,6 +101,16 @@ def status_snapshot(paths: Paths) -> dict[str, Any]:
         "initialization": read_json(paths.initialization_state, {"status": "not_started"}),
         "active_images": visual.get("images", []) if isinstance(visual, dict) else [],
     }
+
+
+def _oversight_line(oversight: dict[str, Any] | None) -> str:
+    if not oversight:
+        return "Oversight: the worker model"
+    if not oversight.get("separate_connection"):
+        return f"Oversight: {oversight['model']} on the worker's endpoint"
+    line = (f"Oversight: {oversight['provider']} / {oversight['model']} "
+            f"(own connection; context {oversight['context_window_tokens']:,})")
+    return line + ("; no API key found" if oversight.get("api_key_missing") else "")
 
 
 def format_status(state: dict[str, Any]) -> str:
@@ -108,6 +135,7 @@ def format_status(state: dict[str, Any]) -> str:
             f"Working-memory target: {state['working_memory_tokens']:,}; automatic repair: {'on' if state['auto_repair'] else 'off'}",
             f"Pending events: {len(state['unhandled_interactions'])}; scheduled tasks: {len(state['scheduled_tasks'])}",
             f"Vision: {state['vision_preference']} (effective: {state['effective_vision']})",
+            _oversight_line(state.get("oversight")),
             "Mandatory offloading: " + (f"{state['offload_threshold_percent']:g}%" if state['mandatory_offload'] else "off") + ("; pending" if state['offload_pending'] else ""),
         ])
         sleep = state["sleep"]

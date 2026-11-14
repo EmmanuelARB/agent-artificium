@@ -78,6 +78,8 @@ def _setup_options(args: argparse.Namespace) -> SetupOptions:
         offload_threshold_percent=getattr(args, "offload_threshold", None),
         working_memory_tokens=getattr(args, "working_memory_tokens", None),
         auto_repair=(getattr(args, "auto_repair") == "on" if getattr(args, "auto_repair", None) is not None else None),
+        oversight_off=bool(getattr(args, "off", False)),
+        oversight_check=bool(getattr(args, "check", False)),
         force=bool(getattr(args, "force", False)),
     )
 
@@ -169,7 +171,7 @@ def _has_reconfigure_values(args: argparse.Namespace) -> bool:
             "working_memory_tokens",
             "auto_repair",
         )
-    ) or bool(
+    ) or getattr(args, "off", False) or getattr(args, "check", False) or bool(
         getattr(args, "reset_generation_settings", False)
     )
 
@@ -179,8 +181,21 @@ def _reconfigure(paths: Paths, args: argparse.Namespace) -> None:
     interactive = sys.stdin.isatty() and not _has_reconfigure_values(args) and not getattr(args, "yes", False)
     if interactive and not sys.stdin.isatty():
         raise RuntimeError("interactive configure requires a terminal or explicit flags")
-    updated = SetupWizard(paths).reconfigure(options, interactive=interactive)
+    if interactive and options.scope == "all":
+        print("What would you like to configure?\n")
+        print("1. Model connection and harness settings")
+        print("2. Oversight connection (a second model for periodic checks, request_review and consult)")
+        if input("\nChoose [1]: ").strip() == "2":
+            options.scope = "oversight"
+    wizard = SetupWizard(paths)
+    updated = wizard.reconfigure(options, interactive=interactive)
     pid, alive = _cli._pid_state(paths)
+    if options.scope == "oversight":
+        _print_oversight_result(options, updated, getattr(wizard, "last_check", None))
+        if alive and pid and not options.oversight_check:
+            print(f"Artificium is currently running as PID {pid}. Restart it to apply "
+                  "configuration changes: python3 artificium.py restart")
+        return
     print("Configuration saved. Self and memory were not changed.")
     print(
         f"Engine: {updated.provider}/{updated.model} · "
@@ -199,6 +214,26 @@ def _reconfigure(paths: Paths, args: argparse.Namespace) -> None:
             f"Artificium is currently running as PID {pid}. Restart it to apply "
             "configuration changes: python3 artificium.py restart"
         )
+
+
+def _print_oversight_result(options: SetupOptions, updated, check: dict | None) -> None:
+    oversight = updated.oversight_config()
+    if options.oversight_off:
+        print("Oversight connection removed. Oversight requests use the worker model "
+              + (f"({updated.oversight_model}) " if updated.oversight_model else "")
+              + "with the worker's key.")
+    elif oversight is None:
+        print("No separate oversight connection is configured.")
+    elif options.oversight_check:
+        print(f"Oversight connection works: {oversight.provider}/{oversight.model} "
+              f"({(check or {}).get('seconds', '?')}s).")
+    else:
+        print("Oversight connection saved. Self and memory were not changed.")
+        print(f"Oversight: {oversight.provider}/{oversight.model} · "
+              f"context window: {oversight.context_window_tokens:,} tokens · "
+              f"reasoning: {reasoning_label(oversight)}")
+        print("It serves the periodic checks, request_review and consult, with its own "
+              "key, and is billed separately from the worker.")
 
 
 def _replace_key(paths: Paths, args: argparse.Namespace) -> None:
