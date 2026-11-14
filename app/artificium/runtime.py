@@ -858,7 +858,7 @@ class Artificium:
             too_large = exc.status == 413 and not exc.image_input_unsupported
             if (
                 self._contains_image(messages)
-                and ((self.config.vision == "auto" and exc.status in {400, 415, 422}
+                and ((self.config.vision == "auto" and exc.status in {400, 413, 415, 422}
                       and exc.image_input_unsupported) or too_large)
                 and self._downgrade_context_images(
                     str(exc), too_large=too_large,
