@@ -673,6 +673,21 @@ class LimitTests(RuntimeCase):
         self.assertEqual(len(list(self.paths.notifications_new.glob("*.json"))), 1)
 
 
+class DecisionReviewLimitTests(RuntimeCase):
+    def test_at_the_limit_the_decision_is_sent_at_once_with_a_note(self) -> None:
+        self.spend(10.0)
+        result = self.agent.tools.send_interaction("room", "Which parser?", decision=True,
+                                                   new_interaction=True)
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(result["review"]["reason"], "cost_limit")
+        self.assertIn("cost limit", result["summary"])
+        self.assertEqual((len(self.worker.requests), len(self.judge_engine.requests)), (0, 0))
+        self.assertEqual([r["reason"] for r in self.lifetime("decision_review_skipped")],
+                         ["cost_limit"])
+        # Not a connection failure.
+        self.assertEqual(self.lifetime("oversight_connection_failed"), [])
+
+
 class PauseTests(RuntimeCase):
     """run_forever with the fake clock: the pause, the queue and the resume."""
 

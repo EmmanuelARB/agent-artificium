@@ -4,10 +4,21 @@ import re
 from typing import Any
 
 from .directives import DirectiveStore
-from .oversight import _clip
 
 
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _clip(text: Any, limit: int) -> str:
+    """Head and tail of a long text, so neither the opening nor the end is lost."""
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text
+    head = limit * 2 // 3
+    return (f"{text[:head]}\n[... {len(text) - limit} characters omitted ...]\n"
+            f"{text[-(limit - head):]}")
+
+
 # One label per line, in any case, with or without Markdown emphasis; a
 # section runs to the next label.
 _REVIEW_LABEL = re.compile(
