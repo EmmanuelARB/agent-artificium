@@ -324,6 +324,7 @@ class BoundTests(ToolsCase):
         self.assertIn("not_shown (window full)", statuses[-1])
         self.assertTrue(all(status == "ok" for status in statuses[:-1]))
         self.assertLess(len(statuses), reads + 2)
+        self.assertEqual(self.lifetime("oversight_tool_executed")[-1]["status"], "not_shown (window full)")
         last = self.judge.requests[-1]
         self.assertIn("size limit", last[-1]["content"])
         self.assertIn("Answer now", last[-1]["content"])
@@ -377,6 +378,20 @@ class NativeProtocolTests(ToolsCase):
             "kind": "system", "tools": [{"type": "function", "function": {"name": "x"}}]}},
             {"role": "user", "content": "q"}])
         self.assertNotIn("tools", payload, "definitions alone never switch a text-mode connection")
+
+    def test_every_native_adapter_sends_the_definitions_a_request_asks_for(self) -> None:
+        from artificium.config import NATIVE_TOOL_ADAPTERS
+        tools = [{"type": "function", "function": {"name": "read_file", "parameters": {}}}]
+        messages = [{"role": "system", "content": "S",
+                     "_artificium": {"kind": "system", "native": True, "tools": tools}},
+                    {"role": "user", "content": "q"}]
+        seen = set()
+        for provider in ("custom", "mistral", "openrouter", "vllm", "llamacpp", "opencode-go"):
+            config = Config(provider=provider, model="m",
+                            **({"base_url": "http://x/v1"} if provider == "custom" else {}))
+            seen.add(config.adapter)
+            self.assertEqual(make_engine(config, "k").prepare(messages).payload["tools"], tools, provider)
+        self.assertEqual(seen, set(NATIVE_TOOL_ADAPTERS))
 
     def test_a_text_adapter_uses_the_text_protocol(self) -> None:
         with mock.patch.object(self.agent, "_oversight_native_tools", return_value=False):

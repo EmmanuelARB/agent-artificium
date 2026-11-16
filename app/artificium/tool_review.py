@@ -269,14 +269,17 @@ class ReviewToolsMixin:
         """
         number = checked["tool_rounds"]
         cap = self.config.max_tool_output_chars
-        results: list[tuple[ToolIntent, str]] = []
+        results: list[tuple[ToolIntent, str, str]] = []
         for intent in intents:
             result = self._reviewer_tool(intent)
             body = json_dumps(result, pretty=True)
             if len(body) > cap:
                 body = _clip(body, max(200, cap - 100))
-            results.append((intent, body))
-            status = str(result.get("status", "ok"))
+            results.append((intent, body, str(result.get("status", "ok"))))
+        used = sum(len(str(item.get("content") or "")) for item in history)
+        full = used + len(text) + sum(len(body) for _, body, _ in results) > limit
+        for intent, body, status in results:
+            status = "not_shown (window full)" if full else status
             summary = self._arguments_summary(intent.arguments)
             checked["calls"].append({"round": number, "tool": intent.name or "?",
                                      "arguments": summary, "status": status})
@@ -285,17 +288,14 @@ class ReviewToolsMixin:
                           result_characters=len(body))
             self.records.emit("oversight_tool_executed", **fields)
             self.records.life("oversight_tool_executed", **fields)
-        used = sum(len(str(item.get("content") or "")) for item in history)
-        if used + len(text) + sum(len(body) for _, body in results) > limit:
-            for entry in checked["calls"][-len(results):]:
-                entry["status"] = "not_shown (window full)"
+        if full:
             return "The conversation has reached the size limit and the last results were not added."
         valid = all(intent.name and not intent.parse_error for intent in intents)
         history.append({"role": "assistant", "content": text, "_artificium": {
             "kind": "life_loop_output",
             **({"tool_names": [intent.name for intent in intents]} if valid
                else {"tool_request_valid": False})}})
-        for position, (intent, body) in enumerate(results):
+        for position, (intent, body, _) in enumerate(results):
             history.append({"role": role, "content": body, "_artificium": {
                 "kind": "tool_result", "tool": intent.name,
                 "tool_id": f"{request_id}:{position}"}})
