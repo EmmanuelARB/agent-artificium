@@ -682,6 +682,21 @@ def render_decision_requested(record, options, session=None):
     return lines
 
 
+def render_decision_review_completed(record, options, session=None):
+    limit = max(20, options.width - 60)
+    text = " ".join(str(record.get("preview") or "").split())
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "…"
+    return [f"[decision review] necessary: {record.get('necessary') or '?'}, framing: "
+            f"{record.get('framing') or '?'}, default: {record.get('default') or 'none'}"
+            + (f" — {text}" if text else "")]
+
+
+def render_decision_review_skipped(record, options, session=None):
+    return [f"[decision review] did not run ({record.get('reason') or 'unknown'}); "
+            "the decision was sent without it"]
+
+
 def render_evaluation_completed(record, options, session=None):
     limit = max(20, options.width - 40)
     text = " ".join(str(record.get("preview") or "").split())
@@ -728,6 +743,8 @@ _RENDERERS: dict[str, Callable[[dict, RenderOptions, "WatchSession | None"], lis
     events.KIND_SLEEP_ENDED: render_sleep_ended,
     events.KIND_COST_LIMIT_REACHED: render_cost_limit_reached,
     events.KIND_DECISION_REQUESTED: render_decision_requested,
+    events.KIND_DECISION_REVIEW_COMPLETED: render_decision_review_completed,
+    events.KIND_DECISION_REVIEW_SKIPPED: render_decision_review_skipped,
     events.KIND_EVALUATION_COMPLETED: render_evaluation_completed,
     events.KIND_PREVIOUS_RUN_ENDED_UNCLEANLY: render_previous_run_ended_uncleanly,
     events.KIND_CONTEXT_USAGE: render_context_usage,

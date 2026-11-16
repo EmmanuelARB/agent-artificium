@@ -272,7 +272,7 @@ obligation visible in runtime state.
 ### `send_interaction`
 
 ```json
-{"tool":"send_interaction","interaction_id":"INTERACTION_ID","content":"MESSAGE","in_reply_to":"EVENT_ID OR NULL","attachments":[],"recipient":null,"new_interaction":false,"decision":false,"options":null,"default":null,"reply_by_hours":null}
+{"tool":"send_interaction","interaction_id":"INTERACTION_ID","content":"MESSAGE","in_reply_to":"EVENT_ID OR NULL","attachments":[],"recipient":null,"new_interaction":false,"decision":false,"options":null,"default":null,"reply_by_hours":null,"review_complete":false}
 ```
 
 Writes one outbound event to the exact interaction. Plain life-loop text is
@@ -283,7 +283,9 @@ separate conversation-creation tool is required. Set `decision` to true
 whenever the message asks the entity for something you need back: a choice,
 approval, file, or information, even if you keep working meanwhile (`options`:
 2 to 8 short choices). Chat pins it until answered; progress reports stay plain.
-Only one decision stays open: a new one withdraws the older. Give a `default`
+Only one decision stays open: a new one withdraws the older. A decision is not
+sent on the first call: it returns a fresh-context review. Drop it, or send it
+again, revised or not, with `review_complete` true. Give a `default`
 (one of the `options`, written exactly): what you will do if nobody answers
 within `reply_by_hours` (the configured wait if null). The harness has it
 checked against what the entity has said before it is applied, and never for

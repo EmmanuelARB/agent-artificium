@@ -599,6 +599,9 @@ class WarningTests(RuntimeCase):
 
 
 class LimitTests(RuntimeCase):
+    # These tests count oversight requests; a decision's review would be one.
+    config_changes = {"decision_review": False}
+
     def test_at_the_limit_no_request_is_sent_from_either_connection(self) -> None:
         self.spend(6.0)
         self.spend(4.0, "oversight")  # the limit covers both together
@@ -668,6 +671,21 @@ class LimitTests(RuntimeCase):
             self.agent.run_turn(trigger="manual")
         self.assertTrue(self.agent.notifications.has_new())
         self.assertEqual(len(list(self.paths.notifications_new.glob("*.json"))), 1)
+
+
+class DecisionReviewLimitTests(RuntimeCase):
+    def test_at_the_limit_the_decision_is_sent_at_once_with_a_note(self) -> None:
+        self.spend(10.0)
+        result = self.agent.tools.send_interaction("room", "Which parser?", decision=True,
+                                                   new_interaction=True)
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(result["review"]["reason"], "cost_limit")
+        self.assertIn("cost limit", result["summary"])
+        self.assertEqual((len(self.worker.requests), len(self.judge_engine.requests)), (0, 0))
+        self.assertEqual([r["reason"] for r in self.lifetime("decision_review_skipped")],
+                         ["cost_limit"])
+        # Not a connection failure.
+        self.assertEqual(self.lifetime("oversight_connection_failed"), [])
 
 
 class PauseTests(RuntimeCase):

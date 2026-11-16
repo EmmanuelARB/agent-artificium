@@ -204,6 +204,7 @@ class RuntimeCase(unittest.TestCase):
     """An agent whose engines are fakes: one per connection, built on demand."""
 
     section: dict | None = dict(SECTION)
+    config_changes: dict = {}
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -214,7 +215,8 @@ class RuntimeCase(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {}, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
-        config = _worker(oversight_connection=dict(self.section) if self.section else None)
+        config = _worker(oversight_connection=dict(self.section) if self.section else None,
+                         **self.config_changes)
         ConfigStore(self.paths).save(config)
         self.secrets = SecretsStore(self.paths)
         self.secrets.save_api_key("worker-key")
@@ -240,6 +242,9 @@ class RuntimeCase(unittest.TestCase):
 
 
 class RoutingTests(RuntimeCase):
+    # A decision's own review is routed in DecisionReviewRuntimeTests.
+    config_changes = {"decision_review": False}
+
     def assert_served_by_oversight(self, action) -> None:
         before = (len(self.worker.requests), len(self.judge.requests))
         action()
@@ -409,6 +414,79 @@ class OversightFailureTests(RuntimeCase):
             self.agent._oversight_complete([{"role": "user", "content": "q"}])
         self.assertEqual(self.agent._connection, "worker")
         self.assertIs(self.agent.engine, self.worker)
+
+
+REVIEW = "NECESSARY: yes\nFRAMING: ok\nPOINTS: none\nDEFAULT: none\nREASONS: only the entity can say."
+
+
+class DecisionReviewRuntimeTests(RuntimeCase):
+    """The review a decision passes goes through the oversight connection."""
+
+    def decide(self, **extra) -> dict:
+        return self.agent.tools.send_interaction(
+            "room", "Which parser?", decision=True, new_interaction=True, **extra)
+
+    def test_the_review_goes_to_the_oversight_connection_and_is_recorded_as_such(self) -> None:
+        self.judge.responses = [REVIEW]
+        result = self.decide()
+        self.assertEqual(result["status"], "review_required")
+        self.assertEqual((len(self.worker.requests), len(self.judge.requests)), (0, 1))
+        record = self.lifetime("decision_review_completed")[0]
+        self.assertEqual((record["connection"], record["request_id"]),
+                         ("oversight", result["request_id"]))
+        requests = self.lifetime("model_request")
+        self.assertEqual(requests[-1]["connection"], "oversight")
+        # Confirming sends it, with no further request.
+        sent = self.decide(review_complete=True)
+        self.assertEqual(sent["status"], "sent")
+        self.assertEqual(len(self.judge.requests), 1)
+
+    def test_the_review_sees_no_working_memory(self) -> None:
+        self.agent.working.append({"role": "assistant", "content": "PRIVATE WORKING DETAIL"}, origin="test")
+        self.judge.responses = [REVIEW]
+        self.decide()
+        sent = json.dumps(self.judge.requests[-1])
+        self.assertIn("Which parser?", sent)
+        self.assertNotIn("PRIVATE WORKING DETAIL", sent)
+
+    def test_a_failing_connection_sends_the_decision_at_once_and_never_asks_the_worker(self) -> None:
+        def broken(messages):
+            raise EngineError("HTTP 401: Invalid API key", status=401, kind="auth")
+        self.judge.complete = broken
+        result = self.decide()
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(result["review"]["reason"], "connection_failed")
+        self.assertIn("sent without one", result["summary"])
+        self.assertEqual(len(self.worker.requests), 0)
+        self.assertEqual(self.lifetime("oversight_connection_failed")[0]["wake_reason"],
+                         "decision_review")
+        skipped = self.lifetime("decision_review_skipped")[0]
+        self.assertEqual(skipped["reason"], "connection_failed")
+        self.assertIn("Invalid API key", skipped["error"])
+        self.assertEqual(len(self.agent.interactions.open_decisions()), 1)
+
+    def test_an_unparseable_answer_sends_the_decision_at_once(self) -> None:
+        self.judge.responses = ["Looks fine to me."]
+        result = self.decide()
+        self.assertEqual((result["status"], result["review"]["reason"]), ("sent", "unparseable"))
+
+    def test_the_setting_off_makes_no_request_at_all(self) -> None:
+        self.agent.tools.config = dataclasses.replace(self.agent.tools.config, decision_review=False)
+        result = self.decide()
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual((len(self.worker.requests), len(self.judge.requests)), (0, 0))
+
+
+class DecisionReviewWithoutSectionTests(RuntimeCase):
+    section = None
+
+    def test_without_a_section_the_review_goes_to_the_worker_connection(self) -> None:
+        self.worker.responses = [REVIEW]
+        result = self.agent.tools.send_interaction("room", "Which parser?", decision=True,
+                                                   new_interaction=True)
+        self.assertEqual(result["status"], "review_required")
+        self.assertEqual((len(self.worker.requests), len(self.judge.requests)), (1, 0))
+        self.assertEqual(self.lifetime("decision_review_completed")[0]["connection"], "worker")
 
 
 class ConsultToolTests(RuntimeCase):

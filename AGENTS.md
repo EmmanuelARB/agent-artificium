@@ -38,7 +38,7 @@ writes). Never commit them, and never read or print `.secrets.json`.
 | Context budget | `context_budget.py`, `calibration.py`, `usage.py` |
 | Cost | `cost.py` (prices, provider-reported cost, the per-day `CostLedger`, the 80% / limit status, `CostLimitReached`, `cost_limit_problem`); used by `runtime.py` (`_account_usage`, `_cost_limit_gate`, `_cost_events`, `_start_cost_pause`) |
 | Conversation identity | `session.py` (`LifeLoopSession`, `new_session_id`, `SESSION_HEADER`); used by `runtime.py` (`_prepare`, `_oversight_complete`) and by the `opencode_go` adapter (`engine_adapters.py`), which also needs the product User-Agent every transport sends; the definition of a conversation is in the module docstring and the README "OpenCode Go" section |
-| Tools | `tools.py` (registry and dispatch), `tool_schemas.py` (native tool definitions), `tool_files.py`, `tool_memory.py`, `tool_interactions.py`, `tool_review.py` (`request_review`, `consult`), `tool_attention.py` (Infinite Attention), `tool_loader.py` (loads agent-editable tools from `mind/tools/`) |
+| Tools | `tools.py` (registry and dispatch), `tool_schemas.py` (native tool definitions), `tool_files.py`, `tool_memory.py`, `tool_interactions.py`, `tool_review.py` (`request_review`, `consult`, the review a decision passes in `send_interaction`: `_decision_gate`), `tool_attention.py` (Infinite Attention), `tool_loader.py` (loads agent-editable tools from `mind/tools/`) |
 | Memory and continuity | `memory.py` (long-term memory, working memory, offloading) |
 | Interactions and events | `interactions.py`, `events.py` |
 | Records and logs | `records.py` (`emit` → lifetime log, `life` → life-loop log, feature logs, model exchanges) |
@@ -91,7 +91,7 @@ writes). Never commit them, and never read or print `.secrets.json`.
   worker's harness settings). Its key lives under `"oversight"` in
   `.secrets.json` (`SecretsStore.resolve_oversight_key`; saving either key
   keeps the other). `Artificium._oversight_complete` serves the evaluation, the
-  decision-default check, `request_review` and `consult`: the section wins,
+  decision-default check, the decision review, `request_review` and `consult`: the section wins,
   else `harness.oversight_model` on the worker's engine, else the worker; it
   swaps engine and config for the one request, never falls back to the worker
   when a section exists, and records `oversight_connection_failed`. Every

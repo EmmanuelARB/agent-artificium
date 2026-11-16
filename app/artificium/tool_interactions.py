@@ -122,6 +122,7 @@ class InteractionToolsMixin:
         options: list[str] | None = None,
         default: str | None = None,
         reply_by_hours: float | None = None,
+        review_complete: bool = False,
     ) -> dict[str, Any]:
         refusal = self._check_interaction_target(
             interaction_id, in_reply_to, new_interaction
@@ -129,6 +130,13 @@ class InteractionToolsMixin:
             decision, options, default, reply_by_hours)
         if refusal:
             return refusal
+        review = None
+        gate = getattr(self, "_decision_gate", None)  # absent in an older overlay
+        if decision and callable(gate):
+            held, review = gate(interaction_id, content, options, default,
+                                reply_by_hours, bool(review_complete))
+            if held:
+                return held
         extra: dict[str, Any] = {}
         hours = self._default_hours(default, reply_by_hours)
         previous = self.interactions.open_decisions() if decision else []
@@ -186,6 +194,10 @@ class InteractionToolsMixin:
                                       "and, if it passes, delivers it to you as your own choice")
             elif default:
                 result["summary"] += "; defaults are off in this configuration, so none was kept"
+            if review:
+                result["review"] = review
+                if review.get("note"):
+                    result["summary"] += f"; {review['note']}"
             if withdrawn:
                 result["withdrawn"] = withdrawn
                 result["summary"] += (f"; {len(withdrawn)} earlier unanswered decision(s) "

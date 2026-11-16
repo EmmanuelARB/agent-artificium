@@ -85,6 +85,8 @@ def _setup_options(args: argparse.Namespace) -> SetupOptions:
     # setup.py written before the oversight connection has no such fields.
     options.oversight_off = bool(getattr(args, "off", False))
     options.oversight_check = bool(getattr(args, "check", False))
+    review = getattr(args, "decision_review", None)
+    options.decision_review = None if review is None else review == "on"
     for name in ("price_input", "price_cached_input", "price_cache_write", "price_output",
                  "price_currency", "daily_cost_limit", "cost_day_timezone"):
         setattr(options, name, getattr(args, name, None))
@@ -176,7 +178,7 @@ def _has_reconfigure_values(args: argparse.Namespace) -> bool:
             "mandatory_offload",
             "offload_threshold",
             "working_memory_tokens",
-            "auto_repair",
+            "auto_repair", "decision_review",
             "price_input", "price_cached_input", "price_cache_write", "price_output",
             "price_currency", "daily_cost_limit", "cost_day_timezone",
         )

@@ -561,6 +561,15 @@ class FreshContextSessionTests(RuntimeCase):
         self.assertRegex(a, SESSION)
 
 
+    def test_a_decision_review_gets_one_too(self) -> None:
+        self.worker.responses = ["NECESSARY: yes\nFRAMING: ok\nPOINTS: none\nDEFAULT: none\nREASONS: x"]
+        result = self.agent.tools.send_interaction("room", "Which parser?", decision=True,
+                                                   new_interaction=True)
+        self.assertEqual(result["status"], "review_required")
+        (session,) = self.worker.sessions
+        self.assertRegex(session, SESSION)
+
+
 class OversightConnectionSessionTests(RuntimeCase):
     oversight = {"provider": "opencode-go", "model": "kimi-k3", "context_window_tokens": 30_000}
 

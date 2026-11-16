@@ -99,6 +99,8 @@ class SetupOptions:
     offload_threshold_percent: float | None = None
     working_memory_tokens: str | None = None
     auto_repair: bool | None = None
+    # Whether the oversight model reads each decision before it is sent.
+    decision_review: bool | None = None
     # configure oversight: remove the connection, or only test the saved one.
     oversight_off: bool = False
     oversight_check: bool = False
@@ -696,8 +698,10 @@ class SetupWizard:
     @staticmethod
     def _harness_values(options: SetupOptions, current: Config | None) -> dict[str, object]:
         values: dict[str, object] = {}
-        for name in ("mandatory_offload", "offload_threshold_percent", "auto_repair"):
-            value = getattr(options, name)
+        for name in ("mandatory_offload", "offload_threshold_percent", "auto_repair",
+                     "decision_review"):
+            # getattr: an options object built by an older overlay has no such field.
+            value = getattr(options, name, None)
             if value is not None:
                 values[name] = value
         if options.working_memory_tokens is not None:
@@ -752,8 +756,9 @@ class SetupWizard:
             raise ValueError("Prices belong to a connection: use configure model or configure oversight")
         if options.scope == "oversight":
             rejected = [name for name in ("vision", "mandatory_offload", "offload_threshold_percent",
-                                          "working_memory_tokens", "auto_repair", "tool_mode")
-                        if getattr(options, name) is not None]
+                                          "working_memory_tokens", "auto_repair", "tool_mode",
+                                          "decision_review")
+                        if getattr(options, name, None) is not None]
             if rejected:
                 raise ValueError("Settings that do not apply to the oversight connection: "
                                  + ", ".join(rejected) + ". Use configure harness or configure model")
@@ -761,9 +766,9 @@ class SetupWizard:
                 raise ValueError("Use --off or --check, not both")
             return
         if options.scope == "model" and any(
-            getattr(options, name) is not None for name in ("vision", "mandatory_offload", "offload_threshold_percent", "working_memory_tokens", "auto_repair")
+            getattr(options, name, None) is not None for name in ("vision", "mandatory_offload", "offload_threshold_percent", "working_memory_tokens", "auto_repair", "decision_review")
         ):
-            raise ValueError("Use configure harness for vision and offloading settings")
+            raise ValueError("Use configure harness for vision, offloading and decision review settings")
         if options.scope == "harness" and (options.reset_generation_settings or any(
             getattr(options, name) is not None for name in (
                 "provider", "model", "api_url", "api_key", "api_key_file", "endpoint", "adapter",

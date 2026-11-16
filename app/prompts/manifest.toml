@@ -31,6 +31,8 @@ restored_checkpoint = "runtime/restored_checkpoint.md"
 emergency_summary = "runtime/emergency_summary.md"
 default_check_system = "runtime/default_check_system.md"
 default_check_request = "runtime/default_check_request.md"
+decision_review_system = "runtime/decision_review_system.md"
+decision_review_request = "runtime/decision_review_request.md"
 evaluation_system = "runtime/evaluation_system.md"
 evaluation_request = "runtime/evaluation_request.md"
 
