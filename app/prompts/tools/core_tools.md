@@ -213,9 +213,10 @@ cost and interference while retaining its lessons and continuation state.
 
 Sends the claim, the evidence files, the constraints, and the standing
 directives to the model in a fresh context that shares none of your working
-memory. The reviewer looks for the strongest reasons the claim could be false.
-Use it before building on a diagnosis or calling a result verified. It costs one
-inference, and its verdict is evidence to weigh, not authority.
+memory. The reviewer looks for the strongest reasons the claim could be false,
+and can read files itself (read-only).
+Use it before building on a diagnosis or calling a result verified. It costs a few
+inferences, and its verdict is evidence to weigh, not authority.
 
 ### `consult`
 
@@ -226,8 +227,8 @@ inference, and its verdict is evidence to weigh, not authority.
 Asks the oversight model, usually stronger and costlier than you, a major
 question in a fresh context: a plan, a change of strategy, a hard decision, or a diagnosis
 you are stuck on. It sees what the entity asked, your context and the evidence
-files, not your working memory. Use it for major decisions, not routine steps;
-its answer is advice to weigh.
+files, not your working memory, and can read files itself (read-only). Use it
+for major decisions, not routine steps; its answer is advice to weigh.
 
 ### `revise_self`
 

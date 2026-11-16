@@ -301,6 +301,10 @@ class Config:
     # A decision is first read by the oversight model in a fresh context, and
     # sent only on a second call (see tool_review.py); False sends at once.
     decision_review: bool = True
+    # How many rounds of read-only tool calls (read_file, list_directory,
+    # search_memory) the oversight model may take in consult and
+    # request_review before it must answer; 0 is a single request.
+    oversight_tool_rounds: int = 4
     # How often a fresh-context reviewer judges whether the work advances.
     evaluation_interval_hours: float = 24.0
     # A sleep with no scheduled task and no pending default wakes after this.
@@ -402,6 +406,10 @@ class Config:
             raise ValueError("prompt_cache_key must be null, auto, or a non-empty string")
         if not isinstance(self.auto_repair, bool):
             raise ValueError("auto_repair must be boolean")
+        if (isinstance(self.oversight_tool_rounds, bool)
+                or not isinstance(self.oversight_tool_rounds, int)
+                or not 0 <= self.oversight_tool_rounds <= 20):
+            raise ValueError("oversight_tool_rounds must be a whole number from 0 to 20")
         if self.context_reminder_tokens < 1_000:
             raise ValueError("context_reminder_tokens must be at least 1000")
         if self.meta_memory_guidance_tokens < 1_000:

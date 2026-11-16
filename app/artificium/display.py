@@ -697,6 +697,15 @@ def render_decision_review_skipped(record, options, session=None):
             "the decision was sent without it"]
 
 
+def render_oversight_tool_executed(record, options, session=None):
+    limit = max(20, options.width - 40)
+    shown = " ".join(str(record.get("arguments") or "").split())
+    if len(shown) > limit:
+        shown = shown[:limit].rstrip() + "…"
+    return [f"[{record.get('during') or 'oversight'}] the reviewer called "
+            f"{record.get('tool') or '?'} {shown} → {record.get('status') or '?'}"]
+
+
 def render_evaluation_completed(record, options, session=None):
     limit = max(20, options.width - 40)
     text = " ".join(str(record.get("preview") or "").split())
@@ -745,6 +754,7 @@ _RENDERERS: dict[str, Callable[[dict, RenderOptions, "WatchSession | None"], lis
     events.KIND_DECISION_REQUESTED: render_decision_requested,
     events.KIND_DECISION_REVIEW_COMPLETED: render_decision_review_completed,
     events.KIND_DECISION_REVIEW_SKIPPED: render_decision_review_skipped,
+    events.KIND_OVERSIGHT_TOOL_EXECUTED: render_oversight_tool_executed,
     events.KIND_EVALUATION_COMPLETED: render_evaluation_completed,
     events.KIND_PREVIOUS_RUN_ENDED_UNCLEANLY: render_previous_run_ended_uncleanly,
     events.KIND_CONTEXT_USAGE: render_context_usage,

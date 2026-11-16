@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import contextlib
 import re
 from typing import Any
 
 from .directives import DirectiveStore
+from .filesystem import json_dumps, read_json, atomic_write_json
+from .life_loop import ToolIntent, parse_life_loop_output
 
 
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -61,6 +64,16 @@ def parse_decision_review(text: str, options: list[str] | None = None) -> dict[s
             "default": default, "reasons": _clip(sections.get("REASONS", ""), 1_500)}
 
 
+# What the oversight model may call while it checks evidence: the registry's
+# own read-only handlers, nothing that writes, runs, sends or sleeps.
+OVERSIGHT_READ_TOOLS = ("read_file", "list_directory", "search_memory")
+# Files the reviewer never reads, wherever they are (the operator's settings
+# and the API key); the file tools themselves allow them.
+_WITHHELD_NAMES = frozenset({".secrets.json", "config.json"})
+# Share of the oversight window the conversation may fill before it must answer.
+_WINDOW_SHARE = 0.8
+
+
 class ReviewToolsMixin:
     """Fresh-context requests to the oversight model: ``request_review``,
     ``consult``, and the review a decision passes before it is sent.
@@ -72,7 +85,11 @@ class ReviewToolsMixin:
     Config whose context window bounds what is sent) and
     ``oversight_connection_label``. Without them (a registry built outside the
     runtime) the tools report that they are unavailable, and a decision is sent
-    without review.
+    without review. ``oversight_native_tools`` (does the oversight connection's
+    adapter take native tool definitions) and ``oversight_conversation`` (a
+    context manager that makes the requests inside it one conversation) are
+    optional: without them the reviewer uses the text protocol and each request
+    is its own conversation.
     """
 
     def _evidence_sections(
@@ -104,6 +121,193 @@ class ReviewToolsMixin:
             evidence.append({"path": str(path), "truncated": truncated})
         return sections, evidence
 
+    # -- the reviewer's read-only tools -------------------------------------
+
+    def _oversight_rounds(self) -> int:
+        try:
+            return max(0, int(getattr(self.config, "oversight_tool_rounds", 4)))
+        except (TypeError, ValueError):
+            return 4
+
+    def _oversight_tool_schemas(self) -> list[dict[str, Any]]:
+        from .tool_schemas import native_tool_schemas
+
+        schemas = native_tool_schemas(type(self), self.prompts.tool_catalog())
+        return [item for item in schemas if item["function"]["name"] in OVERSIGHT_READ_TOOLS]
+
+    def _withheld(self, path: Any) -> bool:
+        """Whether ``path`` is a file the reviewer never reads (see _WITHHELD_NAMES)."""
+        try:
+            target = self._resolve(str(path))
+            if target.name in _WITHHELD_NAMES:
+                return True
+            if target.exists():
+                return any(own.exists() and target.samefile(own)
+                           for own in (self.paths.secrets, self.paths.config))
+        except (OSError, ValueError):
+            return True
+        return False
+
+    def _reviewer_tool(self, intent: ToolIntent) -> dict[str, Any]:
+        """One call of the reviewer, through the registry's own handler.
+
+        Anything but the read-only tools is refused, and so is the operator's
+        configuration and the API key. Errors are returned to the reviewer as
+        results, never raised.
+        """
+        name = intent.name
+        if intent.parse_error:
+            return {"status": "error", "summary": intent.parse_error}
+        if name not in OVERSIGHT_READ_TOOLS:
+            return {"status": "error", "summary": (
+                f"`{name}` is not available to you and was not run; you can call only "
+                + ", ".join(OVERSIGHT_READ_TOOLS) + ".")}
+        problem = self.validate(intent)
+        if problem is not None:
+            return {"status": "error", "summary": problem["error"],
+                    "accepted_arguments": problem["accepted_arguments"]}
+        if name != "search_memory" and "path" in intent.arguments and self._withheld(
+                intent.arguments["path"]):
+            return {"status": "error", "summary": (
+                f"{intent.arguments['path']} is withheld from reviewers (settings and "
+                "credentials) and was not read; check something else.")}
+        # read_file notes which paths the agent read only in part, for the
+        # agent's own overwrite guard; the reviewer's reads are not the agent's.
+        markers = read_json(self.paths.partial_reads_state, None)
+        try:
+            result = self._functions[name](**intent.arguments)
+        except Exception as exc:
+            return {"status": "error", "summary": f"{type(exc).__name__}: {exc}"}
+        finally:
+            if read_json(self.paths.partial_reads_state, None) != markers:
+                try:
+                    if markers is None:
+                        self.paths.partial_reads_state.unlink(missing_ok=True)
+                    else:
+                        atomic_write_json(self.paths.partial_reads_state, markers)
+                except OSError:
+                    pass
+        if not isinstance(result, dict):
+            return {"status": "ok", "value": result}
+        if name == "search_memory":
+            result["results"] = [item for item in result.get("results") or []
+                                 if not self._withheld(item.get("path", ""))]
+        return result
+
+    def _reviewer_system(self, system: str, rounds: int, native: bool) -> dict[str, Any]:
+        text = system + "\n\n" + self.prompts.runtime("oversight_tools", rounds=rounds)
+        if not native:
+            text += self.prompts.runtime("oversight_tools_text")
+        message: dict[str, Any] = {"role": "system", "content": text}
+        if native:
+            message["_artificium"] = {"kind": "system", "native": True,
+                                      "tools": self._oversight_tool_schemas()}
+        return message
+
+    def _oversight_exchange(
+        self, tool: str, requester: Any, messages: list[dict[str, Any]],
+        checked: dict[str, Any],
+    ) -> tuple[str, str]:
+        """The request to the oversight model, with the read-only loop when allowed.
+
+        ``checked`` is filled in as the loop runs, so a failure part-way still
+        tells the agent what was read. Each round is an ordinary oversight
+        request; the history is kept as text with the same markers the
+        life-loop uses, so the native protocol replays it as structured calls
+        (engine_native) and the text protocol sends it as written.
+        """
+        rounds = self._oversight_rounds()
+        checked["tool_rounds_allowed"] = rounds
+        if rounds <= 0 or not messages or messages[0].get("role") != "system":
+            request_id, text = requester(messages)
+            checked["requests"] += 1
+            checked["request_ids"].append(request_id)
+            return request_id, text
+        native_asked = getattr(self, "oversight_native_tools", None)
+        native = bool(native_asked()) if callable(native_asked) else False
+        budget_config = getattr(self, "oversight_budget", None)
+        window = budget_config() if callable(budget_config) else self.config
+        limit = int(window.working_memory_limit * window.chars_per_token * _WINDOW_SHARE)
+        role = getattr(self.config, "runtime_message_role", "user")
+        opened = [self._reviewer_system(messages[0]["content"], rounds, native), *messages[1:]]
+        # The final request keeps the same system text (a changed prefix would
+        # lose the provider's cache) but declares no tools.
+        plain = {**opened[0]}
+        plain.pop("_artificium", None)
+        history = list(opened)
+        conversation = getattr(self, "oversight_conversation", None)
+        reason = ""
+        with conversation() if callable(conversation) else contextlib.nullcontext():
+            while True:
+                final = bool(reason) or checked["tool_rounds"] >= rounds
+                if final and not reason:
+                    reason = "You have used your tool rounds."
+                request = history if not final else [
+                    plain, *history[1:],
+                    {"role": role, "content": self.prompts.runtime(
+                        "oversight_answer_now", reason=reason)}]
+                request_id, text = requester(request)
+                checked["requests"] += 1
+                checked["request_ids"].append(request_id)
+                parsed = parse_life_loop_output(text)
+                if final:
+                    return request_id, parsed.visible if parsed.tools else text
+                if not parsed.tools:
+                    return request_id, text
+                checked["tool_rounds"] += 1
+                reason = self._reviewer_round(
+                    tool, request_id, text, parsed.tools, history, checked, role, limit)
+
+    def _reviewer_round(
+        self, tool: str, request_id: str, text: str, intents: list[ToolIntent],
+        history: list[dict[str, Any]], checked: dict[str, Any], role: str, limit: int,
+    ) -> str:
+        """Run one response's calls in order and extend the history with them.
+
+        Returns why the next request must be the answer (the results would not
+        fit the window), or an empty string to go on.
+        """
+        number = checked["tool_rounds"]
+        cap = self.config.max_tool_output_chars
+        results: list[tuple[ToolIntent, str]] = []
+        for intent in intents:
+            result = self._reviewer_tool(intent)
+            body = json_dumps(result, pretty=True)
+            if len(body) > cap:
+                body = _clip(body, max(200, cap - 100))
+            results.append((intent, body))
+            status = str(result.get("status", "ok"))
+            summary = self._arguments_summary(intent.arguments)
+            checked["calls"].append({"round": number, "tool": intent.name or "?",
+                                     "arguments": summary, "status": status})
+            fields = dict(tool=intent.name or "?", during=tool, arguments=summary,
+                          status=status, round=number, request_id=request_id,
+                          result_characters=len(body))
+            self.records.emit("oversight_tool_executed", **fields)
+            self.records.life("oversight_tool_executed", **fields)
+        used = sum(len(str(item.get("content") or "")) for item in history)
+        if used + len(text) + sum(len(body) for _, body in results) > limit:
+            for entry in checked["calls"][-len(results):]:
+                entry["status"] = "not_shown (window full)"
+            return "The conversation has reached the size limit and the last results were not added."
+        valid = all(intent.name and not intent.parse_error for intent in intents)
+        history.append({"role": "assistant", "content": text, "_artificium": {
+            "kind": "life_loop_output",
+            **({"tool_names": [intent.name for intent in intents]} if valid
+               else {"tool_request_valid": False})}})
+        for position, (intent, body) in enumerate(results):
+            history.append({"role": role, "content": body, "_artificium": {
+                "kind": "tool_result", "tool": intent.name,
+                "tool_id": f"{request_id}:{position}"}})
+        return ""
+
+    @staticmethod
+    def _arguments_summary(arguments: dict[str, Any]) -> str:
+        return " ".join(
+            f"{key}={_clip(value, 120)!r}" if isinstance(value, str)
+            else f"{key}={_clip(json_dumps(value), 120)}"
+            for key, value in arguments.items())
+
     @staticmethod
     def _oversight_unavailable(tool: str, exc: Exception) -> dict[str, Any]:
         if getattr(exc, "cost_limited", False):
@@ -122,6 +326,30 @@ class ReviewToolsMixin:
                 "continue the work without it, and retry later only if it still matters."
             ),
         }
+
+    @staticmethod
+    def _reviewer_checked(checked: dict[str, Any]) -> dict[str, Any]:
+        """What the reviewer read itself, for the result the agent sees; empty
+        when it was not allowed to read."""
+        if not checked.get("tool_rounds_allowed"):
+            return {}
+        return {"reviewer_checked": {
+            "tool_rounds_used": checked["tool_rounds"],
+            "tool_rounds_allowed": checked["tool_rounds_allowed"],
+            "requests": checked["requests"],
+            "request_ids": checked["request_ids"],
+            "calls": checked["calls"],
+        }}
+
+    def _oversight_failed(
+        self, tool: str, exc: Exception, checked: dict[str, Any],
+    ) -> dict[str, Any]:
+        result = self._oversight_unavailable(tool, exc)
+        if checked["calls"]:
+            result.update(self._reviewer_checked(checked))
+            result["summary"] += (" The reviewer had already read what `reviewer_checked` "
+                                  "lists; the rest of its work is lost.")
+        return result
 
     def request_review(
         self,
@@ -157,10 +385,12 @@ class ReviewToolsMixin:
                 ),
             },
         ]
+        checked = {"tool_rounds": 0, "requests": 0, "request_ids": [], "calls": []}
         try:
-            request_id, text = reviewer(messages)
+            request_id, text = self._oversight_exchange(
+                "request_review", reviewer, messages, checked)
         except Exception as exc:
-            return self._oversight_unavailable("request_review", exc)
+            return self._oversight_failed("request_review", exc, checked)
         review = _THINK.sub("", text).strip()
         result = {
             "status": "reviewed",
@@ -168,10 +398,12 @@ class ReviewToolsMixin:
             "request_id": request_id,
             "review": review or "(the reviewer returned no text)",
             "evidence": evidence,
+            **self._reviewer_checked(checked),
         }
         self.records.emit(
             "review_completed", request_id=request_id, evidence=evidence,
-            claim_characters=len(claim),
+            claim_characters=len(claim), tool_rounds=checked["tool_rounds"],
+            requests=checked["requests"],
         )
         return result
 
@@ -212,10 +444,12 @@ class ReviewToolsMixin:
                 ),
             },
         ]
+        checked = {"tool_rounds": 0, "requests": 0, "request_ids": [], "calls": []}
         try:
-            request_id, text = consultant(messages)
+            request_id, text = self._oversight_exchange(
+                "consult", consultant, messages, checked)
         except Exception as exc:
-            return self._oversight_unavailable("consult", exc)
+            return self._oversight_failed("consult", exc, checked)
         answer = _THINK.sub("", text).strip()
         result = {
             "status": "consulted",
@@ -224,10 +458,12 @@ class ReviewToolsMixin:
             "request_id": request_id,
             "answer": answer or "(the oversight model returned no text)",
             "evidence": evidence,
+            **self._reviewer_checked(checked),
         }
         self.records.emit(
             "consult_completed", request_id=request_id, evidence=evidence,
-            question_characters=len(question),
+            question_characters=len(question), tool_rounds=checked["tool_rounds"],
+            requests=checked["requests"],
         )
         return result
 

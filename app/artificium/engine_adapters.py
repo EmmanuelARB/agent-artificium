@@ -6,7 +6,7 @@ import urllib.parse
 from typing import Any
 
 from .config import Config
-from .engine_native import native_messages, tools_from_messages
+from .engine_native import native_messages, native_requested, tools_from_messages
 from .session import SESSION_HEADER, new_session_id
 from .engine import (
     Engine,
@@ -28,13 +28,13 @@ from .engine import (
 def _chat_messages(config: Config, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Request messages in the chat-completions shape, tool turns native when asked."""
 
-    if config.tool_mode == "native":
+    if native_requested(config, messages):
         messages = native_messages(messages)
     return materialize_openai_messages(messages)
 
 
 def _native_tools(config: Config, messages: list[dict[str, Any]], payload: dict[str, Any]) -> None:
-    if config.tool_mode == "native":
+    if native_requested(config, messages):
         tools = tools_from_messages(messages)
         if tools:
             payload["tools"] = tools
@@ -120,7 +120,7 @@ class LlamaCppEngine(OpenAICompatibleEngine):
         payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": _llamacpp_messages(
-                native_messages(messages) if self.config.tool_mode == "native" else messages
+                native_messages(messages) if native_requested(self.config, messages) else messages
             ),
             **_stream_flag(self.config),
             **_chat_common(self.config),

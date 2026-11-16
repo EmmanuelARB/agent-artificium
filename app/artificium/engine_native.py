@@ -36,6 +36,18 @@ def tools_from_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return []
 
 
+def native_requested(config: Any, messages: list[dict[str, Any]]) -> bool:
+    """Whether this request uses the API's tool calling: the connection is in
+    native mode, or the request asks for it itself with ``native`` on its
+    system message (a review that reads files, on a connection whose own tool
+    mode is text). Definitions alone never switch a text-mode connection."""
+
+    if getattr(config, "tool_mode", "text") == "native":
+        return True
+    return any(message.get("role") == "system" and _meta(message).get("native") is True
+               and bool(_meta(message).get("tools")) for message in messages)
+
+
 def call_id(seed: str) -> str:
     """A stable nine-character alphanumeric id: the strictest format any provider asks for."""
 

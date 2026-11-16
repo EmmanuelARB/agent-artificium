@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import difflib
 import hashlib
@@ -16,6 +17,7 @@ from typing import Any
 from . import _bootstrap
 from .artifacts import ArtifactTracker
 from .config import Config, ConfigStore, SecretsStore
+from . import config as _config_module
 from . import cost as _cost_module
 from .cost import (PRICE_FIELDS, CostLedger, CostLimitReached, cost_limit_problem,
                    has_prices, header_line, money, price_usage, WARN_FRACTION)
@@ -166,6 +168,10 @@ class Artificium:
         # sets _fresh_session for its own duration.
         self._life_session = LifeLoopSession(self.paths.runtime / "life-loop-session.json")
         self._fresh_session: str | None = None
+        # Set while consult or request_review runs its rounds: they share one ID.
+        self._review_session: str | None = None
+        self.tools.oversight_native_tools = self._oversight_native_tools
+        self.tools.oversight_conversation = self._oversight_conversation
         self.tools.reviewer = self._review
         self.tools.consultant = self._consult
         self.tools.decision_reviewer = self._decision_review
@@ -1148,11 +1154,27 @@ class Artificium:
         self._oversight_engine_cache = (config, key, engine)
         return engine
 
+    def _oversight_native_tools(self) -> bool:
+        """Whether the oversight connection's adapter takes native tool definitions."""
+        native = getattr(_config_module, "NATIVE_TOOL_ADAPTERS", frozenset())
+        return self._oversight_budget_config().adapter in native
+
+    @contextlib.contextmanager
+    def _oversight_conversation(self):
+        """Requests made inside are one conversation (session.py), as the
+        rounds of a review that reads files are."""
+        self._review_session = new_session_id()
+        try:
+            yield
+        finally:
+            self._review_session = None
+
     def _oversight_complete(
         self, messages: list[dict[str, Any]], *, wake_reason: str = "oversight",
     ) -> tuple[str, str]:
-        """Each fresh-context request is a conversation of its own (session.py)."""
-        self._fresh_session = new_session_id()
+        """Each fresh-context request is a conversation of its own (session.py),
+        unless a review that reads files is making several (_oversight_conversation)."""
+        self._fresh_session = self._review_session or new_session_id()
         try:
             return self._oversight_request(messages, wake_reason=wake_reason)
         finally:

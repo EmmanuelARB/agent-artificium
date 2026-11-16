@@ -561,6 +561,20 @@ class FreshContextSessionTests(RuntimeCase):
         self.assertRegex(a, SESSION)
 
 
+    def test_the_rounds_of_a_review_that_reads_files_share_one(self) -> None:
+        notes = self.paths.space / "notes.txt"
+        notes.parent.mkdir(parents=True, exist_ok=True)
+        notes.write_text("the cache is flushed at step 7\n")
+        read = '<tool_call>\n{"tool": "read_file", "path": "%s"}\n</tool_call>' % notes
+        self.worker.responses = [read, read, "VERDICT: ok", "RECOMMENDATION: go"]
+        self.agent.tools.request_review("The cache is never stale, I checked.")
+        self.agent.tools.consult("Should the parser be rewritten or patched?")
+        *review, consult = self.worker.sessions
+        self.assertEqual(len(review), 3)
+        self.assertEqual(len(set(review)), 1)
+        self.assertRegex(review[0], SESSION)
+        self.assertNotEqual(consult, review[0])
+
     def test_a_decision_review_gets_one_too(self) -> None:
         self.worker.responses = ["NECESSARY: yes\nFRAMING: ok\nPOINTS: none\nDEFAULT: none\nREASONS: x"]
         result = self.agent.tools.send_interaction("room", "Which parser?", decision=True,
