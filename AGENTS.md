@@ -199,6 +199,9 @@ fixtures keep their historical versions.
 
 - Committing directly to `main` is fine; keep the test suite green at every
   commit.
+- Push to `origin/main` after every commit on `main` without asking. Hold
+  back only when you have a concrete doubt (a red or skipped test, an
+  unverified risky change, an open question to the user), and say why.
 - Never commit `config.json`, `.secrets.json`, `workspace/`, or
   `__pycache__/`.
 - Write commit messages that say what changed and why.
