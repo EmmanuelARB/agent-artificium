@@ -298,6 +298,9 @@ class Config:
     # them gets these defaults, which is the point: they guard long runs.
     # How long a decision's proposed default waits for the entity.
     decision_default_hours: float = 24.0
+    # A decision is first read by the oversight model in a fresh context, and
+    # sent only on a second call (see tool_review.py); False sends at once.
+    decision_review: bool = True
     # How often a fresh-context reviewer judges whether the work advances.
     evaluation_interval_hours: float = 24.0
     # A sleep with no scheduled task and no pending default wakes after this.
@@ -389,7 +392,8 @@ class Config:
                 "tool_mode native needs a chat-completions adapter ("
                 + ", ".join(sorted(NATIVE_TOOL_ADAPTERS)) + f"), not {self.adapter}"
             )
-        for name in ("prompt_cache", "stream_responses", "pinned_mind_snapshot"):
+        for name in ("prompt_cache", "stream_responses", "pinned_mind_snapshot",
+                     "decision_review"):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be boolean")
         if self.prompt_cache_key is not None and (

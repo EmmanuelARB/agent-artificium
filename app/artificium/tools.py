@@ -129,6 +129,8 @@ class ToolRegistry(
             "tool": "send_interaction",
             "interaction_id": "INTERACTION_ID",
             "content": "MESSAGE",
+            "decision": False,
+            "review_complete": False,
         },
         "record_directive": {
             "tool": "record_directive",
@@ -242,6 +244,8 @@ class ToolRegistry(
         # The same for consult, plus what the entity asked (a string) and the
         # Config whose context window bounds the evidence sent.
         self.consultant: Callable[[list[dict[str, Any]]], tuple[str, str]] | None = None
+        self.decision_reviewer: Callable[[list[dict[str, Any]]], tuple[str, str]] | None = None
+        self.oversight_connection_label: Callable[[], str] | None = None
         self.entity_ask: Callable[[], str] | None = None
         self.oversight_budget: Callable[[], Config] | None = None
         self.control_path = self.paths.runtime / "life-loop-control.json"

@@ -168,6 +168,8 @@ class Artificium:
         self._fresh_session: str | None = None
         self.tools.reviewer = self._review
         self.tools.consultant = self._consult
+        self.tools.decision_reviewer = self._decision_review
+        self.tools.oversight_connection_label = self._oversight_connection_label
         self.oversight = Oversight(
             paths, self.config, self.records, self.interactions, self.prompts,
             self._oversight_complete,
@@ -1104,6 +1106,14 @@ class Artificium:
     def _consult(self, messages: list[dict[str, Any]]) -> tuple[str, str]:
         """One fresh-context request for the consult tool."""
         return self._oversight_complete(messages, wake_reason="consult")
+
+    def _decision_review(self, messages: list[dict[str, Any]]) -> tuple[str, str]:
+        """One fresh-context request for the review a decision passes first."""
+        return self._oversight_complete(messages, wake_reason="decision_review")
+
+    def _oversight_connection_label(self) -> str:
+        """The label records carry for an oversight request (see _oversight_request)."""
+        return "worker" if self._oversight_target() is None else "oversight"
 
     def _oversight_budget_config(self) -> Config:
         """The config whose context window bounds what is sent to oversight."""
