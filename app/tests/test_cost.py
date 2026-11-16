@@ -599,6 +599,9 @@ class WarningTests(RuntimeCase):
 
 
 class LimitTests(RuntimeCase):
+    # These tests count oversight requests; a decision's review would be one.
+    config_changes = {"decision_review": False}
+
     def test_at_the_limit_no_request_is_sent_from_either_connection(self) -> None:
         self.spend(6.0)
         self.spend(4.0, "oversight")  # the limit covers both together

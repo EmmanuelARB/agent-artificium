@@ -121,6 +121,7 @@ def _harness_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--mandatory-offload", choices=["on", "off"], help="Require memory offloading at the threshold (default: on)")
     group.add_argument("--offload-threshold", type=float, help="Working-memory percentage, 1–95 (default: 80)")
     group.add_argument("--working-memory-tokens", metavar="TOKENS|auto|same", help="Offloading target; auto is 60%% of the model context (default for new setups), same tracks the whole context")
+    group.add_argument("--decision-review", choices=["on", "off"], help="Have the oversight model read each decision before it is sent (default: on)")
     group.add_argument("--auto-repair", "--emergency-offload", dest="auto_repair", choices=["on", "off"], help="Try earlier context after input failures; up to 3 attempts (default: on)")
 
 

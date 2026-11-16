@@ -204,6 +204,7 @@ class RuntimeCase(unittest.TestCase):
     """An agent whose engines are fakes: one per connection, built on demand."""
 
     section: dict | None = dict(SECTION)
+    config_changes: dict = {}
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -214,7 +215,8 @@ class RuntimeCase(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {}, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
-        config = _worker(oversight_connection=dict(self.section) if self.section else None)
+        config = _worker(oversight_connection=dict(self.section) if self.section else None,
+                         **self.config_changes)
         ConfigStore(self.paths).save(config)
         self.secrets = SecretsStore(self.paths)
         self.secrets.save_api_key("worker-key")
@@ -240,6 +242,9 @@ class RuntimeCase(unittest.TestCase):
 
 
 class RoutingTests(RuntimeCase):
+    # A decision's own review is routed in DecisionReviewRuntimeTests.
+    config_changes = {"decision_review": False}
+
     def assert_served_by_oversight(self, action) -> None:
         before = (len(self.worker.requests), len(self.judge.requests))
         action()

@@ -403,6 +403,271 @@ class OversightModelTests(OversightCase):
                           loaded.idle_wake_hours, loaded.oversight_model), (24.0, 24.0, 6.0, None))
 
 
+REVIEW = ("NECESSARY: yes\nFRAMING: revise\nPOINTS:\n- name the options\n- state your "
+          "recommendation\nDEFAULT: gcc\nREASONS: The entity never chose a toolchain.")
+
+
+class DecisionReviewTests(OversightCase):
+    """A decision is read by a fresh-context reviewer before it is sent."""
+
+    def reviewed(self, replies=None, **config):
+        """A registry whose reviewer is scripted; returns it and the requests."""
+        tools = self.tools(dataclasses.replace(self.config, **config) if config else None)
+        calls: list[list[dict]] = []
+        queue = [REVIEW] * 5 if replies is None else list(replies)
+
+        def reviewer(messages):
+            calls.append(messages)
+            reply = queue.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return f"request_{len(calls)}", reply
+
+        tools.decision_reviewer = reviewer
+        tools.oversight_connection_label = lambda: "oversight"
+        tools.entity_ask = self.oversight()[0]._ask
+        self.client.send("room", sender="entity_1", content="Please build it.")
+        return tools, calls
+
+    def sent(self) -> list[dict]:
+        return [e for e in self.client.events("room") if e.get("direction") == "outbound"
+                and e.get("sender") != "harness" and not str(e.get("content")).startswith("Withdrawn")]
+
+    def lifetime(self, kind: str) -> list[dict]:
+        return [json.loads(line) for line in self.paths.lifetime_log.read_text().splitlines()
+                if json.loads(line).get("kind") == kind]
+
+    def test_the_first_call_sends_nothing_and_returns_the_verdict(self) -> None:
+        tools, calls = self.reviewed()
+        result = tools.send_interaction("room", "Which toolchain?", decision=True,
+                                        options=["clang", "gcc"], default="gcc")
+        self.assertEqual(result["status"], "review_required")
+        self.assertIn("review_complete=true", result["summary"])
+        self.assertEqual(result["request_id"], "request_1")
+        self.assertEqual(result["review"], {
+            "necessary": "yes", "framing": "revise",
+            "points": ["name the options", "state your recommendation"],
+            "default": "gcc", "reasons": "The entity never chose a toolchain."})
+        self.assertEqual(self.sent(), [])
+        self.assertEqual(self.interactions.open_decisions(), [])
+        self.assertEqual(len(calls), 1)
+
+    def test_the_reviewer_sees_the_entity_the_open_decision_and_the_proposal_only(self) -> None:
+        tools, calls = self.reviewed()
+        first, _ = self.client.send("room", sender="entity_1", content="Build it; never ask me to confirm.")
+        tools.record_directive(first["id"], "never ask me to confirm")
+        self.client.send("room", sender="entity_1", content="Latest word: small commits.")
+        tools.working.append({"role": "assistant", "content": "PRIVATE WORKING DETAIL"}, origin="test")
+        tools.send_interaction("room", "Earlier question?", decision=True)  # reviewed, held
+        tools.send_interaction("room", "Earlier question?", decision=True, review_complete=True)
+        tools.send_interaction("room", "Which toolchain?", decision=True,
+                               options=["clang", "gcc"], default="gcc", reply_by_hours=3)
+        request = json.dumps(calls[-1])
+        for text in ("never ask me to confirm", "Build it; never ask me to confirm.",
+                     "small commits", "Earlier question?", "Which toolchain?",
+                     "clang; gcc", "3 h", "withdraws this one"):
+            self.assertIn(text, request)
+        self.assertNotIn("PRIVATE WORKING DETAIL", request)
+        self.assertEqual([m["role"] for m in calls[-1]], ["system", "user"])
+
+    def test_review_complete_sends_it_after_a_review_and_only_once(self) -> None:
+        tools, calls = self.reviewed()
+        tools.send_interaction("room", "Which toolchain?", decision=True)
+        sent = tools.send_interaction("room", "Which toolchain, I recommend gcc?", decision=True,
+                                      review_complete=True)
+        self.assertEqual(sent["status"], "sent")
+        self.assertEqual(sent["review"], {"status": "reviewed", "request_id": "request_1"})
+        self.assertEqual(sent["event"]["kind"], "decision")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(self.interactions.open_decisions()), 1)
+        # The review was spent on that decision: the next one needs its own.
+        again = tools.send_interaction("room", "Another?", decision=True, review_complete=True)
+        self.assertEqual(again["status"], "review_required")
+        self.assertEqual(len(calls), 2)
+
+    def test_review_complete_without_a_review_is_refused_and_starts_one(self) -> None:
+        tools, calls = self.reviewed()
+        result = tools.send_interaction("room", "Which toolchain?", decision=True,
+                                        review_complete=True)
+        self.assertEqual(result["status"], "review_required")
+        self.assertIn("no review was pending", result["summary"])
+        self.assertEqual(self.sent(), [])
+        self.assertEqual(len(calls), 1)
+        # That review is now pending, so the next confirmation is accepted.
+        self.assertEqual(tools.send_interaction("room", "Which toolchain?", decision=True,
+                                                review_complete=True)["status"], "sent")
+
+    def test_a_review_of_another_interaction_or_before_a_restart_does_not_count(self) -> None:
+        tools, calls = self.reviewed()
+        self.client.send("elsewhere", sender="entity_1", content="Hello.")
+        tools.send_interaction("elsewhere", "Which?", decision=True)
+        wrong = tools.send_interaction("room", "Which?", decision=True, review_complete=True)
+        self.assertEqual(wrong["status"], "review_required")
+        self.assertEqual(self.sent(), [])
+        restarted = self.tools()  # the pending reviews lived in memory only
+        restarted.decision_reviewer = lambda messages: ("request_9", REVIEW)
+        again = restarted.send_interaction("elsewhere", "Which?", decision=True,
+                                           review_complete=True)
+        self.assertEqual(again["status"], "review_required")
+        self.assertEqual(self.sent(), [])
+
+    def test_dropping_the_question_leaves_nothing_behind(self) -> None:
+        tools, calls = self.reviewed()
+        tools.send_interaction("room", "Which toolchain?", decision=True)
+        # The agent acts on its own judgement; a plain message is unaffected.
+        plain = tools.send_interaction("room", "Going with gcc.")
+        self.assertEqual(plain["status"], "sent")
+        self.assertEqual(len(self.sent()), 1)
+        self.assertEqual(self.interactions.open_decisions(), [])
+        self.assertEqual(len(calls), 1)
+
+    def test_plain_messages_are_never_reviewed(self) -> None:
+        tools, calls = self.reviewed()
+        tools.send_interaction("room", "Status update.")
+        tools.send_interaction("room", "Another update.", review_complete=True)
+        self.assertEqual(calls, [])
+        self.assertEqual(len(self.sent()), 2)
+        self.assertEqual(self.lifetime("decision_review_skipped"), [])
+
+    def test_a_review_that_cannot_run_sends_at_once_and_says_so(self) -> None:
+        from artificium.cost import CostLimitReached
+        cases = [
+            (RuntimeError("HTTP 401: bad key"), "connection_failed", "could not be reached"),
+            (CostLimitReached("daily cost limit reached"), "cost_limit", "cost limit"),
+            ("I think it is fine.", "unparseable", "no clear verdict"),
+            ("NECESSARY: maybe\nFRAMING: ok", "unparseable", "no clear verdict"),
+            ("NECESSARY: yes\nDEFAULT: gcc", "unparseable", "no clear verdict"),
+        ]
+        for number, (reply, reason, wording) in enumerate(cases, 1):
+            tools, calls = self.reviewed([reply])
+            result = tools.send_interaction("room", f"Which toolchain {number}?",
+                                            decision=True)
+            self.assertEqual(result["status"], "sent", reason)
+            self.assertEqual(result["review"]["status"], "skipped")
+            self.assertEqual(result["review"]["reason"], reason)
+            self.assertIn("sent without one", result["summary"])
+            self.assertIn(wording, result["summary"])
+            self.assertEqual(self.sent()[-1]["content"], f"Which toolchain {number}?")
+        skipped = self.lifetime("decision_review_skipped")
+        self.assertEqual([r["reason"] for r in skipped], [c[1] for c in cases])
+        self.assertIn("bad key", skipped[0]["error"])
+        self.assertEqual(self.lifetime("decision_review_completed"), [])
+
+    def test_a_failure_does_not_leave_an_earlier_review_pending(self) -> None:
+        tools, calls = self.reviewed([REVIEW, RuntimeError("down"), REVIEW])
+        tools.send_interaction("room", "Which?", decision=True)
+        self.assertEqual(tools.send_interaction("room", "Which?", decision=True)["status"], "sent")
+        later = tools.send_interaction("room", "Which now?", decision=True, review_complete=True)
+        self.assertEqual(later["status"], "review_required")
+
+    def test_decision_review_off_sends_at_once_without_a_request(self) -> None:
+        tools, calls = self.reviewed(decision_review=False)
+        result = tools.send_interaction("room", "Which toolchain?", decision=True)
+        self.assertEqual(result["status"], "sent")
+        self.assertNotIn("review", result)
+        self.assertNotIn("without one", result["summary"])
+        self.assertEqual(calls, [])
+        self.assertEqual([r["reason"] for r in self.lifetime("decision_review_skipped")], ["disabled"])
+
+    def test_a_registry_without_a_reviewer_sends_at_once(self) -> None:
+        self.client.send("room", sender="entity_1", content="Please build it.")
+        result = self.tools().send_interaction("room", "Which?", decision=True)
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(result["review"]["reason"], "unavailable")
+
+    def test_the_review_is_recorded_in_the_lifetime_log_and_the_trace(self) -> None:
+        tools, _ = self.reviewed()
+        tools.send_interaction("room", "Which toolchain?", decision=True,
+                               options=["clang", "GCC"])
+        record = self.lifetime("decision_review_completed")[0]
+        self.assertEqual((record["request_id"], record["connection"], record["necessary"],
+                          record["framing"], record["default"], record["interaction_id"]),
+                         ("request_1", "oversight", "yes", "revise", "GCC", "room"))
+        self.assertEqual(record["points"], ["name the options", "state your recommendation"])
+        trace = [json.loads(line) for line in self.paths.life_loop_log.read_text().splitlines()]
+        self.assertIn("decision_review_completed", [item["kind"] for item in trace])
+
+    def test_the_verdict_is_parsed_from_the_fixed_form(self) -> None:
+        from artificium.tool_review import parse_decision_review as parse
+        text = ("<think>hm</think>**NECESSARY:** No\n**FRAMING**: OK\nPOINTS: none\n"
+                "DEFAULT: `Clang.`\nREASONS: the entity said\n  go ahead.")
+        self.assertEqual(parse(text, ["gcc", "clang"]), {
+            "necessary": "no", "framing": "ok", "points": [], "default": "clang",
+            "reasons": "the entity said\n  go ahead."})
+        for words in ("none", "None - no option is safe", "no safe default", "n/a"):
+            self.assertIsNone(parse(f"NECESSARY: yes\nFRAMING: ok\nDEFAULT: {words}")["default"])
+        # An option that merely begins with "none" is still an option.
+        self.assertEqual(parse("NECESSARY: yes\nFRAMING: ok\nDEFAULT: None of the above",
+                               ["None of the above", "x"])["default"], "None of the above")
+        # A free answer keeps what the reviewer wrote.
+        self.assertEqual(parse("NECESSARY: yes\nFRAMING: ok\nDEFAULT: proceed")["default"], "proceed")
+        self.assertIsNone(parse("NECESSARY: yes"))
+        self.assertIsNone(parse(""))
+
+    def test_the_prompts_are_declared_and_fully_filled(self) -> None:
+        request = self.prompts.runtime(
+            "decision_review_request", ask="A", open_decision="O", message="M",
+            options="Opts", default="D", reply_by="2 h")
+        self.assertNotIn("{{", request)
+        system = self.prompts.runtime("decision_review_system")
+        for label in ("NECESSARY:", "FRAMING:", "POINTS:", "DEFAULT:", "REASONS:"):
+            self.assertIn(label, system)
+
+    def test_the_tool_catalog_and_native_schema_know_review_complete(self) -> None:
+        from artificium.tool_schemas import native_tool_schemas
+        tools = self.tools()
+        self.assertIn("review_complete", tools.accepted_arguments("send_interaction")["optional"])
+        self.assertIn("review_complete", tools.canonical_example("send_interaction"))
+        schemas = {item["function"]["name"]: item["function"]
+                   for item in native_tool_schemas(ToolRegistry, self.prompts.tool_catalog())}
+        parameters = schemas["send_interaction"]["parameters"]
+        self.assertEqual(parameters["properties"]["review_complete"], {"type": "boolean"})
+        self.assertNotIn("review_complete", parameters["required"])
+        self.assertIn("review_complete", schemas["send_interaction"]["description"])
+
+    def test_the_setting_defaults_on_validates_and_is_saved_with_every_field(self) -> None:
+        self.assertIs(self.config.decision_review, True)
+        with self.assertRaises(ValueError):
+            dataclasses.replace(self.config, decision_review="no")
+        document = json.loads(self.paths.config.read_text())
+        self.assertIs(document["harness"]["decision_review"], True)
+        del document["harness"]["decision_review"]
+        self.paths.config.write_text(json.dumps(document))
+        self.assertIs(ConfigStore(self.paths).load().decision_review, True)
+
+    def test_configure_turns_it_off_and_on_offline(self) -> None:
+        import contextlib
+        import io
+        from artificium.cli import main
+
+        def run(*argv):
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                return main(["--root", str(self.root), *argv]), err.getvalue()
+
+        code, err = run("configure", "harness", "--decision-review", "off")
+        self.assertEqual(code, 0, err)
+        self.assertIs(ConfigStore(self.paths).load().decision_review, False)
+        self.assertEqual(run("configure", "harness", "--decision-review", "on")[0], 0)
+        self.assertIs(ConfigStore(self.paths).load().decision_review, True)
+        # It belongs to the harness, not to a connection.
+        self.assertEqual(run("configure", "oversight", "--decision-review", "off")[0], 2)
+        self.assertEqual(run("configure", "model", "--decision-review", "off")[0], 2)
+
+    def test_watch_shows_a_short_line_for_each_record(self) -> None:
+        from artificium import display
+        options = display.RenderOptions(color=False, width=100, timestamps=False)
+        done = display.render_event_body({
+            "kind": "decision_review_completed", "necessary": "no", "framing": "ok",
+            "default": None, "preview": "The entity already said so."}, options)
+        self.assertEqual(done, ["[decision review] necessary: no, framing: ok, default: none "
+                                "— The entity already said so."])
+        skipped = display.render_event_body(
+            {"kind": "decision_review_skipped", "reason": "cost_limit"}, options)
+        self.assertEqual(skipped, ["[decision review] did not run (cost_limit); the decision "
+                                   "was sent without it"])
+
+
 class IdleFallbackTests(OversightCase):
     def agent(self, **changes) -> Artificium:
         if changes:
