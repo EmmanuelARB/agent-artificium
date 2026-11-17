@@ -41,25 +41,39 @@ def helper_config(config: Config) -> Config:
     )
 
 
-def source_excerpt(history: list[dict[str, Any]], byte_limit: int) -> tuple[str, bool]:
-    # No image loading. Image paths and tool results remain inert source data.
-    raw = json_dumps(history).encode("utf-8")
+def excerpt_text(text: str, byte_limit: int) -> tuple[str, bool]:
+    raw = text.encode("utf-8")
     if len(raw) <= byte_limit:
         return raw.decode("utf-8"), False
     start = byte_limit // 3
-    text = (raw[:start].decode("utf-8", errors="ignore")
-            + "\n[Middle of record omitted; consult the original request log.]\n"
-            + raw[-(byte_limit - start):].decode("utf-8", errors="ignore"))
-    return text, True
+    excerpt = (raw[:start].decode("utf-8", errors="ignore")
+               + "\n[Middle of record omitted; consult the original request log.]\n"
+               + raw[-(byte_limit - start):].decode("utf-8", errors="ignore"))
+    return excerpt, True
+
+
+def source_excerpt(history: list[dict[str, Any]], byte_limit: int) -> tuple[str, bool]:
+    # No image loading. Image paths and tool results remain inert source data.
+    return excerpt_text(json_dumps(history), byte_limit)
 
 
 def summarize(*, config: Config, api_key: str | None, history: list[dict[str, Any]],
               original_log: str, attempt: int, prompts: PromptPack,
-              records: Records, observe: Callable[[Any], None] | None = None) -> tuple[str, bool]:
+              records: Records, observe: Callable[[Any], None] | None = None,
+              system_prompt: str | None = None, source_text: str | None = None,
+              request_prefix: str = "emergency_summary_") -> tuple[str, bool]:
+    """Compress source material in an isolated, tool-free request.
+
+    ``system_prompt`` and ``source_text`` let another caller (the checkpoint
+    tier merge) reuse the same bounded helper with its own short instructions
+    and its own exact source text instead of the request-repair payload.
+    """
+
     helper = helper_config(config)
     engine = make_engine(helper, api_key)
     engine.request_attempts = 1
-    request_id = sortable_id("emergency_summary_")
+    request_id = sortable_id(request_prefix)
+    system = system_prompt if system_prompt is not None else prompts.runtime("emergency_summary")
     messages: list[dict[str, Any]] = []
     parameters: dict[str, Any] = {}
     try:
@@ -67,13 +81,18 @@ def summarize(*, config: Config, api_key: str | None, history: list[dict[str, An
         # repeats token counting, never inference or tool execution.
         byte_limit = int(config.context_window_tokens * config.chars_per_token / 2)
         while True:
-            excerpt, omitted = source_excerpt(history, byte_limit)
-            messages = [
-                {"role": "system", "content": prompts.runtime("emergency_summary")},
-                {"role": "user", "content": json_dumps({
+            if source_text is not None:
+                excerpt, omitted = excerpt_text(source_text, byte_limit)
+                user_content = excerpt
+            else:
+                excerpt, omitted = source_excerpt(history, byte_limit)
+                user_content = json_dumps({
                     "original_request_log": original_log, "excerpt_omitted_material": omitted,
                     "execution_record": excerpt,
-                })},
+                })
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
             ]
             prepared = engine.prepare(messages)
             try:

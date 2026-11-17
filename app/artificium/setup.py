@@ -97,6 +97,8 @@ class SetupOptions:
     vision: str | None = None
     mandatory_offload: bool | None = None
     offload_threshold_percent: float | None = None
+    # How many of the newest offload checkpoints stay verbatim.
+    checkpoint_keep_verbatim: int | None = None
     working_memory_tokens: str | None = None
     auto_repair: bool | None = None
     # Whether the oversight model reads each decision before it is sent.
@@ -701,7 +703,8 @@ class SetupWizard:
     def _harness_values(options: SetupOptions, current: Config | None) -> dict[str, object]:
         values: dict[str, object] = {}
         for name in ("mandatory_offload", "offload_threshold_percent", "auto_repair",
-                     "decision_review", "oversight_tool_rounds"):
+                     "decision_review", "oversight_tool_rounds",
+                     "checkpoint_keep_verbatim"):
             # getattr: an options object built by an older overlay has no such field.
             value = getattr(options, name, None)
             if value is not None:
@@ -759,7 +762,8 @@ class SetupWizard:
         if options.scope == "oversight":
             rejected = [name for name in ("vision", "mandatory_offload", "offload_threshold_percent",
                                           "working_memory_tokens", "auto_repair", "tool_mode",
-                                          "decision_review", "oversight_tool_rounds")
+                                          "decision_review", "oversight_tool_rounds",
+                                          "checkpoint_keep_verbatim")
                         if getattr(options, name, None) is not None]
             if rejected:
                 raise ValueError("Settings that do not apply to the oversight connection: "
@@ -768,7 +772,7 @@ class SetupWizard:
                 raise ValueError("Use --off or --check, not both")
             return
         if options.scope == "model" and any(
-            getattr(options, name, None) is not None for name in ("vision", "mandatory_offload", "offload_threshold_percent", "working_memory_tokens", "auto_repair", "decision_review", "oversight_tool_rounds")
+            getattr(options, name, None) is not None for name in ("vision", "mandatory_offload", "offload_threshold_percent", "working_memory_tokens", "auto_repair", "decision_review", "oversight_tool_rounds", "checkpoint_keep_verbatim")
         ):
             raise ValueError("Use configure harness for vision, offloading, decision review and oversight tool settings")
         if options.scope == "harness" and (options.reset_generation_settings or any(

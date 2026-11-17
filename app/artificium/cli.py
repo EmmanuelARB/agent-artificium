@@ -20,10 +20,10 @@ from .config import (
 from .engine import EngineError, make_engine
 from .connection import verify_connection
 from .oversight_connection import verify_oversight_connection
-from .filesystem import json_dumps
+from .filesystem import Paths, json_dumps
 from .interactions import ArtificiumClient
 from .prompts import PromptPack
-from .records import Records
+from .records import Console, Records
 from .runtime import Artificium
 from .operator import process_state, status_snapshot, format_status
 from .setup import (
@@ -120,6 +120,7 @@ def _harness_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--vision", choices=["auto", "yes", "no"], help="Image preference; checked against model capability")
     group.add_argument("--mandatory-offload", choices=["on", "off"], help="Require memory offloading at the threshold (default: on)")
     group.add_argument("--offload-threshold", type=float, help="Working-memory percentage, 1–95 (default: 80)")
+    group.add_argument("--checkpoint-keep-verbatim", type=int, metavar="N", help="How many of the newest offload checkpoints stay verbatim below mind/memory/context; older ones are merged into one older-tier checkpoint (0 turns merging off; default: 3)")
     group.add_argument("--working-memory-tokens", metavar="TOKENS|auto|same", help="Offloading target; auto is 60%% of the model context (default for new setups), same tracks the whole context")
     group.add_argument("--decision-review", choices=["on", "off"], help="Have the oversight model read each decision before it is sent (default: on)")
     group.add_argument("--oversight-tool-rounds", type=int, metavar="N", help="Rounds of read-only tool calls (read_file, list_directory, search_memory) the oversight model may take in consult and request_review before it answers; 0 is a single request (default: 4)")
@@ -356,12 +357,64 @@ def build_parser() -> argparse.ArgumentParser:
     key = commands.add_parser("key", help="Replace the saved API key")
     key.add_argument("--api-key")
     key.add_argument("--api-key-file")
+    checkpoints = commands.add_parser(
+        "checkpoints",
+        help="Inspect or merge old working-memory checkpoints",
+    )
+    checkpoints.add_argument(
+        "action", nargs="?", default="tier", choices=["tier", "status"],
+        help="tier merges old checkpoints below mind/memory/context (default); status reports them",
+    )
+    checkpoints.add_argument(
+        "--dry-run", action="store_true",
+        help="Report what would be merged; change nothing and make no model request",
+    )
+    checkpoints.add_argument(
+        "--limit", type=int, default=0,
+        help="Stop after this many merges (default: all)",
+    )
+    checkpoints.add_argument("--json", action="store_true", help="Machine-readable report")
     logs = commands.add_parser("logs", help="Show recent structured life-loop events")
     logs.add_argument("--limit", type=int, default=50)
     logs.add_argument("--feature", help="Show one feature log, e.g. infinite-attention")
     logs.add_argument("--summary", action="store_true", help="Show feature usage counters")
     logs.add_argument("--lifetime", action="store_true", help="Show operational lifetime events")
     return parser
+
+
+def _checkpoints(paths: Paths, args: argparse.Namespace) -> int:
+    """`checkpoints tier|status`: the operator's handle on checkpoint tiering."""
+
+    agent = Artificium(paths, console=Console(quiet=True))
+    if args.action == "status":
+        report = agent.checkpoints.report()
+    else:
+        report = agent.tier_checkpoints(dry_run=args.dry_run, limit=max(0, int(args.limit or 0)))
+    if args.json:
+        print(json_dumps(report, pretty=True))
+        return 1 if report.get("errors") else 0
+    if args.action == "status":
+        print(
+            f"checkpoints: {report['verbatim']} verbatim, {report['merged']} merged tier "
+            f"(keep {report['keep']})"
+        )
+        for item in report["checkpoints"]:
+            print(f"  {item['created_at']}  {item['tier']:<8}  {item['path']}")
+        backlog = report["backlog"]
+        if backlog["completed_at"]:
+            print(f"backlog migration completed {backlog['completed_at']}")
+        elif backlog["started_at"]:
+            print(f"backlog migration in progress (started {backlog['started_at']})")
+        return 0
+    print(
+        f"{report['status']}: {report['merges']} merge(s), "
+        f"{report['verbatim']} verbatim left (keep {report['keep']})"
+    )
+    for target in report.get("targets") or []:
+        print(f"  -> {target}")
+    for error in report.get("errors") or []:
+        print(f"  error: {error}", file=sys.stderr)
+    return 1 if report.get("errors") else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -640,6 +693,8 @@ def _dispatch(argv: list[str] | None = None) -> int:
                 value = records.recent_life(args.limit)
             print(json_dumps(value, pretty=True))
             return 0
+        if args.command == "checkpoints":
+            return _checkpoints(paths, args)
         agent = Artificium(paths)
         if args.command == "run":
             if args.once:

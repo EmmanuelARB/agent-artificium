@@ -610,6 +610,20 @@ def render_memory_event(record, options, session=None):
     return [f"[memory] {label} {path} {before} -> {after}".rstrip()]
 
 
+def render_checkpoint_tiering(record, options, session=None):
+    kind = str(record.get("kind") or "")
+    if kind == events.KIND_CHECKPOINT_MERGED:
+        sources = record.get("sources")
+        count = len(sources) if isinstance(sources, list) else 0
+        tokens = int(_num(record.get("tokens")))
+        return [f"[memory] merged {count} checkpoint(s) into {record.get('target')} ({tokens:,} tokens)"]
+    if kind == events.KIND_CHECKPOINT_TIERING_STARTED:
+        return [f"[memory] checkpoint backlog: {int(_num(record.get('checkpoints'))):,} checkpoints to tier"]
+    if kind == events.KIND_CHECKPOINT_TIERING_COMPLETED:
+        return [f"[memory] checkpoint backlog tiered: {int(_num(record.get('merges')))} merge(s), {record.get('remaining_verbatim')} verbatim left"]
+    return [f"[memory] checkpoint tiering skipped: {record.get('error') or 'nothing to do'}"]
+
+
 def render_pinned_mind_refreshed(record, options, session=None):
     return _render_generic(record, options, tag="memory")
 
@@ -777,6 +791,10 @@ _RENDERERS: dict[str, Callable[[dict, RenderOptions, "WatchSession | None"], lis
     events.KIND_MEMORY_SAVED: render_memory_event,
     events.KIND_PINNED_MIND_REFRESHED: render_pinned_mind_refreshed,
     events.KIND_GUIDANCE_NOTIFICATION: render_guidance_notification,
+    events.KIND_CHECKPOINT_MERGED: render_checkpoint_tiering,
+    events.KIND_CHECKPOINT_TIERING_STARTED: render_checkpoint_tiering,
+    events.KIND_CHECKPOINT_TIERING_COMPLETED: render_checkpoint_tiering,
+    events.KIND_CHECKPOINT_TIERING_SKIPPED: render_checkpoint_tiering,
     events.KIND_REQUEST_REPAIR_STARTED: render_request_repair,
     events.KIND_REQUEST_REPAIR_FAILED: render_request_repair,
     events.KIND_REQUEST_REPAIR_READY: render_request_repair,

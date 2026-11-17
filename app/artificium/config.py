@@ -234,6 +234,10 @@ class Config:
     context_hard_fraction: float = 0.85
     mandatory_offload: bool = False
     offload_threshold_percent: float = 80.0
+    # How many of the newest offload checkpoints stay verbatim under
+    # mind/memory/context/; older ones are merged into one older-tier
+    # checkpoint (see checkpoints.py). 0 turns tiering off.
+    checkpoint_keep_verbatim: int = 3
     working_memory_tokens: int | None = None
     # Share of the model context used as the offloading target when no exact
     # token target is set. None with no token target means the whole context.
@@ -412,6 +416,10 @@ class Config:
             raise ValueError("oversight_tool_rounds must be a whole number from 0 to 20")
         if self.context_reminder_tokens < 1_000:
             raise ValueError("context_reminder_tokens must be at least 1000")
+        if (isinstance(self.checkpoint_keep_verbatim, bool)
+                or not isinstance(self.checkpoint_keep_verbatim, int)
+                or not 0 <= self.checkpoint_keep_verbatim <= 50):
+            raise ValueError("checkpoint_keep_verbatim must be 0 (off) or a whole number from 1 to 50")
         if self.meta_memory_guidance_tokens < 1_000:
             raise ValueError("meta_memory_guidance_tokens must be at least 1000")
         if self.chars_per_token <= 0:

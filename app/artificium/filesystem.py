@@ -547,6 +547,12 @@ class Paths:
         return self.mind / "memory"
 
     @property
+    def checkpoint_dir(self) -> Path:
+        """Where offload checkpoints are saved, below ``mind/memory``."""
+
+        return self.memory / "context"
+
+    @property
     def working_context(self) -> Path:
         return self.runtime / "context.jsonl"
 
@@ -623,6 +629,18 @@ class Paths:
     @property
     def pressure_state(self) -> Path:
         return self.runtime / "context_pressure.json"
+
+    @property
+    def checkpoint_index(self) -> Path:
+        """Which files under ``mind/memory/context`` are offload checkpoints."""
+
+        return self.runtime / "checkpoints.json"
+
+    @property
+    def checkpoint_tiering_state(self) -> Path:
+        """The one-time backlog migration marker (see checkpoints.py)."""
+
+        return self.runtime / "checkpoint-tiering.json"
 
     @property
     def visual_context(self) -> Path:

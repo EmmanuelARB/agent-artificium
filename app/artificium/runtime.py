@@ -28,6 +28,7 @@ from . import context_budget as _context_budget
 from .context_budget import (TokenCount, available_output, check_input,
                              context_exhausted, measure, minimum_generation_room)
 from .calibration import load_calibration, update_calibration
+from .checkpoints import BACKLOG_MERGES_PER_RUN, CheckpointTiering, excerpt
 from .filesystem import (
     Paths,
     atomic_write_json,
@@ -173,6 +174,15 @@ class Artificium:
         self.tools.oversight_native_tools = self._oversight_native_tools
         self.tools.oversight_conversation = self._oversight_conversation
         self.tools.reviewer = self._review
+        # Which offload checkpoints exist and how old ones are tiered
+        # (see checkpoints.py); the summarizer is this instance's own.
+        self.checkpoints = CheckpointTiering(
+            paths,
+            self.config,
+            self.records,
+            console=self.console,
+            summarize=self._summarize_checkpoint_tier,
+        )
         self.tools.consultant = self._consult
         self.tools.decision_reviewer = self._decision_review
         self.tools.oversight_connection_label = self._oversight_connection_label
@@ -2233,6 +2243,9 @@ class Artificium:
                 execution.name in {"offload_working_memory", "compact_context"}
                 and execution.result.get("status") == "offloaded"
             ):
+                # The checkpoint this offload wrote becomes the newest
+                # verbatim one; older ones are tiered right away.
+                self._record_checkpoint(execution.result)
                 # (B6) A context rebuild point: the pinned block may safely
                 # catch up to the live Self/meta-memory here. revise_self
                 # deliberately does not refresh it (the model still sees its
@@ -2251,6 +2264,121 @@ class Artificium:
             self._schedule_sleep()
             return True
         return False
+
+    # -- tiered checkpoints (see checkpoints.py) -----------------------
+
+    def _record_checkpoint(self, result: dict[str, Any]) -> None:
+        """Register the checkpoint an offload just wrote, then tier old ones."""
+
+        raw = result.get("path") or result.get("memory_path")
+        if not raw:
+            return
+        path = Path(str(raw))
+        if not path.is_absolute():
+            # memory_path is relative to mind/; path is the absolute one.
+            path = self.paths.mind / path
+        try:
+            registered = self.checkpoints.register(
+                path, tokens=int(result.get("after_tokens") or 0)
+            )
+            if not registered:
+                return
+            report = self.checkpoints.tier()
+        except Exception as exc:  # maintenance must never fail the turn
+            self.records.emit(
+                "checkpoint_tiering_skipped", error=f"{type(exc).__name__}: {exc}"
+            )
+            return
+        if report.get("errors"):
+            self.records.emit(
+                "checkpoint_tiering_skipped",
+                error=str(report["errors"][-1]),
+                merges=report.get("merges", 0),
+            )
+            return
+        if not report.get("merges"):
+            return
+        sources = report.get("sources") or []
+        self._append_runtime(
+            [
+                self.prompts.event(
+                    "checkpoint_merged",
+                    count=len(sources),
+                    target=report.get("target"),
+                    sources="\n".join(f"- {item}" for item in sources),
+                )
+            ],
+            origin="checkpoint_merged",
+        )
+
+    def _summarize_checkpoint_tier(self, sources: list[dict[str, Any]]) -> str:
+        """One bounded fresh-context summary of old checkpoints.
+
+        It reuses the isolated summarizer the request repair uses (no tools, no
+        life-loop), with its own short instructions. Each source is excerpted to
+        a share of the helper's input budget, so a merge stays one cheap request
+        whatever the checkpoints' size; the raw archives keep what an excerpt
+        drops.
+        """
+
+        self._cost_limit_gate()
+        parameters = inspect.signature(summarize).parameters
+        if not {"system_prompt", "source_text", "request_prefix"} <= set(parameters):
+            raise EngineError(
+                "This workspace's recovery overlay predates tiered checkpoints; "
+                "old checkpoints were left as they are.",
+                kind="overlay",
+            )
+        budget = int(self.config.context_window_tokens * self.config.chars_per_token / 3)
+        per_source = max(400, budget // max(1, len(sources)))
+        listing = "\n\n".join(
+            f"### {item['path']} (created {item['created_at']}, ~{item['tokens']} tokens)\n"
+            f"{excerpt(str(item['content']), per_source)}"
+            for item in sources
+        )
+        extra: dict[str, Any] = {}
+        if "observe" in parameters:
+            extra["observe"] = lambda reply: self._account_usage(
+                "worker", reply.usage, reply.raw
+            )
+        summary, _omitted = summarize(
+            config=self.config,
+            api_key=self.api_key,
+            history=[],
+            original_log="tiered checkpoint merge",
+            attempt=1,
+            prompts=self.prompts,
+            records=self.records,
+            system_prompt=self.prompts.runtime("checkpoint_tier_merge"),
+            source_text=listing,
+            request_prefix="checkpoint_tier_merge_",
+            **extra,
+        )
+        return summary
+
+    def tier_checkpoint_backlog(self) -> dict[str, Any]:
+        """The one-time, resumable migration of a pre-existing backlog."""
+
+        try:
+            report = self.checkpoints.backlog(limit=BACKLOG_MERGES_PER_RUN)
+        except Exception as exc:
+            self.records.emit(
+                "checkpoint_tiering_skipped", error=f"{type(exc).__name__}: {exc}"
+            )
+            return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        if report.get("status") in {"not_needed", "already_completed", "disabled"}:
+            return report
+        self.console.line(
+            "memory",
+            f"checkpoint backlog: {report['merges']} merge(s), "
+            f"{report.get('verbatim')} verbatim left ({report['status']})",
+        )
+        return report
+
+    def tier_checkpoints(self, *, dry_run: bool = False, limit: int = 0) -> dict[str, Any]:
+        """Merge old checkpoints now, as `checkpoints tier` does."""
+
+        return self.checkpoints.tier(dry_run=dry_run, limit=limit, adopt=True)
 
     def _first_wake_notice(self) -> str:
         """The first-wake orientation, or a reminder that names itself as one.
@@ -2686,6 +2814,9 @@ class Artificium:
             with ProcessLock(self.paths.process_lock):
                 self._note_previous_exit()
                 self._write_state("running")
+                # One-time (and resumable) migration of a pre-existing
+                # checkpoint backlog; it never blocks the life-loop.
+                self.tier_checkpoint_backlog()
                 scheduler_thread = threading.Thread(
                     target=scheduler_worker,
                     name="artificium-scheduler",

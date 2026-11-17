@@ -11,6 +11,10 @@ Working-memory offloading means:
 3. Let the harness archive the detailed old context and replace live working
    memory with that checkpoint.
 
+During long multi-hour tasks, save a short progress checkpoint with `save_memory`
+every so often: facts established, hypotheses refuted, next step, measure. Those
+memories outlive this context and inform later summaries.
+
 Use your `<think>` space to revisit, connect, sort, and examine the experience
 while it remains present. Preserve reusable methods, facts, relationships,
 mistakes, corrections, entity understanding, commitments, tool lessons,
