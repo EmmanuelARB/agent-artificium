@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from artificium.checkpoints import BACKLOG_FACTOR, MERGE_BATCH, CheckpointTiering
 from artificium.cli import build_parser, main
@@ -16,6 +17,7 @@ from artificium.engine import Engine, EngineReply
 from artificium.filesystem import Paths, read_json
 from artificium.prompts import PromptPack
 from artificium.records import Console, Records
+from artificium import runtime as runtime_module
 from artificium.runtime import Artificium
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -441,6 +443,40 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(len(self.agent.checkpoints.entries()), 3)
         self.assertEqual(self.summarizer.calls, [])
         self.assertTrue((self.paths.mind / result["memory_path"]).is_file())
+
+    def test_the_merge_uses_the_bounded_helper_with_its_own_prompt(self):
+        captured = {}
+
+        def fake_summarize(*, config, api_key, history, original_log, attempt, prompts,
+                           records, observe=None, system_prompt=None,
+                           source_text=None, request_prefix="emergency_summary_"):
+            captured.update(
+                system_prompt=system_prompt, source_text=source_text,
+                request_prefix=request_prefix, history=history, attempt=attempt,
+            )
+            return "Objective: still the comparison. Next step: rerun it.", False
+
+        sources = [
+            {"path": "mind/memory/context/a.txt", "created_at": "2026-01-01T00:00:00Z",
+             "tokens": 10, "content": "A" * 200_000},
+            {"path": "mind/memory/context/b.txt", "created_at": "2026-01-02T00:00:00Z",
+             "tokens": 10, "content": "B" * 200_000},
+        ]
+        with mock.patch.object(runtime_module, "summarize", fake_summarize):
+            summary = self.agent._summarize_checkpoint_tier(sources)
+        self.assertTrue(summary.startswith("Objective:"))
+        self.assertEqual(captured["request_prefix"], "checkpoint_tier_merge_")
+        self.assertIn("compress old working-memory checkpoints",
+                      " ".join(captured["system_prompt"].split()))
+        self.assertEqual(captured["history"], [])
+        self.assertEqual(captured["attempt"], 1)
+        text = captured["source_text"]
+        self.assertIn("mind/memory/context/a.txt", text)
+        self.assertIn("mind/memory/context/b.txt", text)
+        # Each source is excerpted to a share of the helper's input budget.
+        self.assertIn("characters omitted from this checkpoint", text)
+        budget = self.config.context_window_tokens * self.config.chars_per_token / 3
+        self.assertLess(len(text), budget * 1.2)
 
     def test_the_backlog_pass_never_raises_into_the_life_loop(self):
         self.agent.checkpoints.summarize = FakeSummarizer(fail=RuntimeError("offline"))
