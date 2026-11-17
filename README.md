@@ -277,6 +277,8 @@ Nothing is lost by aiming lower: offloaded history is archived, not deleted.
 
 The model decides what the checkpoint preserves. Archived context and durable interactions are there to recover anything it left out.
 
+**Tiered checkpoints.** Each offload writes one checkpoint below `mind/memory/context/`, so a long-lived instance would keep one file per offload forever. The newest `harness.checkpoint_keep_verbatim` checkpoints (default 3) stay verbatim; older ones are merged into a single older-tier checkpoint whose content is a fresh-context summary of their summaries, naming the files it replaced. Only files inside that directory are ever merged or deleted, and a source is deleted only after the merged file names it; the raw archives under `logs/context/` are never touched, so the detail a summary drops stays recoverable. A checkpoint the agent saves elsewhere below `mind/memory/` is never merged. Each merge is one bounded, tool-free model request and appears in `watch` as a `[memory] merged …` line and in `lifetime.jsonl` as `checkpoint_merged`. An instance that already accumulated more than ten times that many checkpoints is migrated once at startup by the same code path (a few merges per start, resumable, skipped while there is no connection; the marker is `logs/runtime/checkpoint-tiering.json`), or on demand with `python3 artificium.py checkpoints tier` (`--dry-run` reports without changing anything, `--limit N` stops after N merges). `checkpoints status` lists what exists.
+
 **Stalled blockers.** Each confirmed offload may name the main `blocker` and say whether the objective `advanced`, only got `supporting` work, or `none`. The harness keeps that history in `logs/runtime/blocker-history.json`. After six consecutive checkpoints on the same blocker or without an advance (or twelve hours over at least three), it adds a step-back notice: list the assumptions behind the current approach, mark the ones never independently checked, and test the cheapest refutation before another fix of the same kind. The notice repeats every six further checkpoints of the same streak. A checkpoint may also declare a `measure`; the notice shows its recent values and says when it has not changed.
 
 **Time use.** The first offload call also returns a breakdown measured from the lifetime log since the previous checkpoint: wall time, time in model requests, in tool calls, and asleep; the slowest tool calls; and shell commands run three times or more. Waiting on the same slow loop is hard to see from inside a context that is offloaded every hour or two.
@@ -545,6 +547,7 @@ python3 artificium.py restart
 | `--working-memory-tokens auto`, `same`, or `TOKENS` | Working-memory target. `auto` (fresh-setup default) is 60% of the serving context; `same` follows the whole context; a number must be at least 4,000 and fit inside the context. |
 | `--mandatory-offload on` or `off` | Require a successful offload at the threshold. On for fresh setups. |
 | `--offload-threshold PERCENT` | Threshold as a percentage of the working-memory target, 1–95; default 80. |
+| `--checkpoint-keep-verbatim N` | How many of the newest offload checkpoints stay verbatim below `mind/memory/context/`; older ones are merged into one older-tier checkpoint. `0` turns merging off. Default 3. |
 | `--decision-review on` or `off` | Have the oversight model read each decision before it is sent (`configure harness` only). On by default, also for an existing configuration. |
 | `--oversight-tool-rounds N` | Rounds of read-only tool calls the oversight model may take in `consult` and `request_review`, 0–20; `0` is a single request (`configure harness` only). Default 4, also for an existing configuration. |
 | `--auto-repair on` or `off` | Retry from an earlier context after an input failure, up to three attempts. On for fresh setups. |
@@ -562,6 +565,7 @@ A few advanced settings have no CLI flag. Edit them in `config.json`, then resta
 | `model.prompt_cache` | `true` | Anthropic cache breakpoints (see feature 17). |
 | `model.prompt_cache_key` | `null` | `"auto"` or a string sends a `prompt_cache_key` to OpenAI Responses and OpenAI-compatible servers. |
 | `harness.pinned_mind_snapshot` | `true` | Freeze Self and meta-memory between context rebuilds for cacheability. |
+| `harness.checkpoint_keep_verbatim` | `3` | How many of the newest offload checkpoints stay verbatim below `mind/memory/context/`; older ones are merged into one older-tier checkpoint (see "Working memory and offloading"). `0` turns merging off. A saved file without the key means `3`. |
 | `harness.decision_default_hours` | `24` | How long a decision's proposed default waits for you before the harness checks it (see "Oversight"). `0` turns defaults off. |
 | `harness.decision_review` | `true` | The oversight model reads each decision in a fresh context before it is sent, and the agent confirms with `review_complete` (see "Decision review"). `false` sends decisions at once. |
 | `harness.oversight_tool_rounds` | `4` | How many rounds of read-only tool calls (`read_file`, `list_directory`, `search_memory`) the oversight model may take in `consult` and `request_review` before it must answer; `0` is a single request, as before (see "Oversight connection"). A saved file without the key means `4`. |
@@ -718,6 +722,7 @@ Run commands as `python3 artificium.py COMMAND`, from any directory; the launche
 | `doctor` / `check` | Inspect the request mapping, or test the complete connection. |
 | `key` | Verify and save a replacement API key. |
 | `logs` | Recent trace entries; `--lifetime`, `--feature NAME`, and `--summary` give other views. |
+| `checkpoints tier` / `checkpoints status` | Merge old offload checkpoints now (`--dry-run`, `--limit N`), or list them and the backlog marker. |
 | `upgrade` / `upgrade --check` | Fast-forward the clone with `git pull`, or preview the change. |
 | `reset` | Delete `workspace/` and grow a fresh mind from the seed; the model connection is kept. |
 | `overrides` / `overrides diff [NAME]` / `overrides clear [NAME]` | List, compare, or remove the agent's prompt and code overrides. |

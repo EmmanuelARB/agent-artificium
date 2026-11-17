@@ -2694,6 +2694,9 @@ class Artificium:
 
     def run_once(self, *, trigger: str = "manual") -> str:
         self.scheduler.fire_due()
+        # The same one-time backlog migration a continuous start does, so an
+        # instance driven by repeated bounded runs still gets it.
+        self.tier_checkpoint_backlog()
         return self.run_turn(trigger=trigger)
 
     def _error_sleep(self, exc: Exception, repeats: int) -> None:

@@ -40,6 +40,7 @@ writes). Never commit them, and never read or print `.secrets.json`.
 | Conversation identity | `session.py` (`LifeLoopSession`, `new_session_id`, `SESSION_HEADER`); used by `runtime.py` (`_prepare`, `_oversight_complete`) and by the `opencode_go` adapter (`engine_adapters.py`), which also needs the product User-Agent every transport sends; the definition of a conversation is in the module docstring and the README "OpenCode Go" section |
 | Tools | `tools.py` (registry and dispatch), `tool_schemas.py` (native tool definitions), `tool_files.py`, `tool_memory.py`, `tool_interactions.py`, `tool_review.py` (`request_review`, `consult`, the review a decision passes in `send_interaction`: `_decision_gate`), `tool_attention.py` (Infinite Attention), `tool_loader.py` (loads agent-editable tools from `mind/tools/`) |
 | Memory and continuity | `memory.py` (long-term memory, working memory, offloading) |
+| Checkpoints | `checkpoints.py` (`CheckpointTiering`: the index of offload checkpoints, the older-tier merge, the one-time resumable backlog pass); used by `runtime.py` (`_record_checkpoint`, `tier_checkpoint_backlog`, `_summarize_checkpoint_tier`) and `cli.py` (`checkpoints tier|status`) |
 | Interactions and events | `interactions.py`, `events.py` |
 | Records and logs | `records.py` (`emit` → lifetime log, `life` → life-loop log, feature logs, model exchanges) |
 | Filesystem, seed, versions | `filesystem.py` (`Paths`, atomic writes, seed delivery, file-version backups, shrink guard) |
@@ -111,6 +112,22 @@ writes). Never commit them, and never read or print `.secrets.json`.
   that cannot be enforced is refused (`cost.cost_limit_problem`). The state
   header's `{{cost_line}}` is an optional placeholder (`prompts.OPTIONAL_VALUES`)
   so an older runtime overlay keeps rendering.
+- **Tiered checkpoints.** Every offload writes one checkpoint below
+  `mind/memory/context/`; `logs/runtime/checkpoints.json` records which files
+  those are (paths relative to the workspace). The newest
+  `harness.checkpoint_keep_verbatim` stay verbatim, and older ones are merged
+  into one older-tier checkpoint by `checkpoints.CheckpointTiering`, whose
+  summary comes from `recovery.summarize` with the `checkpoint_tier_merge`
+  prompt (one bounded, tool-free request). Order is the recorded `created_at`,
+  never the file name. A merge writes the target first, then updates the
+  index, then deletes only sources the target names, and only inside the
+  checkpoint directory: `logs/context/` archives and anything outside that
+  directory are never touched. The one-time backlog pass is gated by
+  `logs/runtime/checkpoint-tiering.json` (written as complete only when the
+  backlog is fully reduced) and does a few merges per start so it stays
+  resumable; with no connection it is skipped and retried later. A checkpoint
+  the agent saves elsewhere below `mind/memory/` is not tracked and never
+  merged.
 - **Tools.** A model-facing tool needs: its handler registered in
   `tools.py` (`self._functions`), a canonical example and accepted arguments
   there, and an entry in `prompts/tools/core_tools.md`. Native tool calling
@@ -142,9 +159,10 @@ writes). Never commit them, and never read or print `.secrets.json`.
 - **Logs** (in `workspace/logs/`): `lifetime.jsonl` (operational records via
   `Records.emit`), `life-loop.jsonl` (the life-loop trace via
   `Records.life`), `features/*.jsonl` and `summary.json`, `model/` (gzipped
-  request/response exchanges), `context/` (offload checkpoints), `runtime/`
-  (state, queues, scheduler, seed deliveries, file versions). The lifetime
-  log is authoritative.
+  request/response exchanges), `context/` (raw offload archives), `runtime/`
+  (state, queues, scheduler, seed deliveries, file versions,
+  `checkpoints.json`, `checkpoint-tiering.json`). The lifetime log is
+  authoritative.
 
 ## Development
 

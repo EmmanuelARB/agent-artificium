@@ -6,22 +6,26 @@ long-lived instance accumulates one file per offload forever. The newest
 merged into a single older-tier checkpoint whose content is a fresh-context
 summary of their summaries (``recovery.summarize``, one bounded request).
 
-Only files the harness registered as offload checkpoints are merged, and only
-inside the checkpoint directory. The raw context archives under
+Merging is limited to the checkpoint directory: the files registered there as
+offload checkpoints, plus (in the one-time backlog pass only) the files an
+instance that predates the index already has in it. Nothing outside that
+directory is ever merged or deleted, and the raw context archives under
 ``logs/context/`` are never read, changed, or deleted: they remain the durable
 fallback for anything a summary drops.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .config import Config
 from .filesystem import (
     Paths,
     atomic_write_json,
     atomic_write_text,
+    file_lock,
     read_json,
     sortable_id,
     utc_now,
@@ -119,6 +123,18 @@ class CheckpointTiering:
             )
         return entries
 
+    @contextlib.contextmanager
+    def _index_lock(self) -> Iterator[None]:
+        """Serialize read-modify-write of the index across processes.
+
+        The daemon registers a checkpoint at every offload while an operator may
+        run `checkpoints tier` at the same time; without the lock one of the two
+        could drop the other's entry.
+        """
+
+        with file_lock(self.paths.runtime / "checkpoints.lock"):
+            yield
+
     def _write_index(self, entries: list[dict[str, Any]]) -> None:
         atomic_write_json(
             self.paths.checkpoint_index,
@@ -163,19 +179,39 @@ class CheckpointTiering:
         relative = self._relative(path)
         if relative is None or not self._managed(path):
             return False
-        entries = [entry for entry in self._read_index() if entry["relative_path"] != relative]
-        entries.append(
-            {
-                "path": path,
-                "relative_path": relative,
-                "created_at": created_at or utc_now(),
-                "tokens": int(tokens or 0),
-                "tier": "merged" if tier == "merged" else "verbatim",
-                "sources": list(sources or []),
-            }
-        )
-        self._write_index(entries)
+        with self._index_lock():
+            entries = [entry for entry in self._read_index()
+                       if entry["relative_path"] != relative]
+            entries.append(
+                {
+                    "path": path,
+                    "relative_path": relative,
+                    "created_at": created_at or utc_now(),
+                    "tokens": int(tokens or 0),
+                    "tier": "merged" if tier == "merged" else "verbatim",
+                    "sources": list(sources or []),
+                }
+            )
+            self._write_index(entries)
         return True
+
+    def unregistered(self) -> list[Path]:
+        """Files in the checkpoint directory the index does not know yet."""
+
+        known = {entry["relative_path"] for entry in self._read_index()}
+        found: list[Path] = []
+        if not self.paths.checkpoint_dir.is_dir():
+            return found
+        for path in sorted(self.paths.checkpoint_dir.rglob("*")):
+            if not path.is_file() or path.is_symlink():
+                continue
+            if path.name.startswith(".") or path.name == "index.txt":
+                continue
+            relative = self._relative(path)
+            if relative is None or relative in known:
+                continue
+            found.append(path)
+        return found
 
     def adopt(self, *, write: bool = True) -> list[dict[str, Any]]:
         """Treat files already in the checkpoint directory as checkpoints.
@@ -185,17 +221,10 @@ class CheckpointTiering:
         an unregistered checkpoint has; file names are never used.
         """
 
-        known = {entry["relative_path"] for entry in self._read_index()}
         adopted: list[dict[str, Any]] = []
-        if not self.paths.checkpoint_dir.is_dir():
-            return adopted
-        for path in sorted(self.paths.checkpoint_dir.rglob("*")):
-            if not path.is_file() or path.is_symlink():
-                continue
-            if path.name.startswith(".") or path.name == "index.txt":
-                continue
+        for path in self.unregistered():
             relative = self._relative(path)
-            if relative is None or relative in known:
+            if relative is None:
                 continue
             try:
                 created = path.stat().st_mtime
@@ -213,7 +242,13 @@ class CheckpointTiering:
                 }
             )
         if adopted and write:
-            self._write_index(self._read_index() + adopted)
+            with self._index_lock():
+                entries = self._read_index()
+                known = {entry["relative_path"] for entry in entries}
+                self._write_index(
+                    entries + [entry for entry in adopted
+                               if entry["relative_path"] not in known]
+                )
         return adopted
 
     # -- merging -------------------------------------------------------
@@ -275,10 +310,6 @@ class CheckpointTiering:
         # Index first: the target becomes the merged tier and the sources stop
         # being checkpoints. Only then are the source files removed, so an
         # interrupted merge never loses content.
-        remaining = [
-            entry for entry in self._read_index()
-            if entry["relative_path"] not in {item["relative_path"] for item in sources}
-        ]
         entry = {
             "path": target,
             "relative_path": self._relative(target) or str(target),
@@ -287,7 +318,11 @@ class CheckpointTiering:
             "tier": "merged",
             "sources": [item["relative_path"] for item in sources],
         }
-        self._write_index(remaining + [entry])
+        with self._index_lock():
+            retired = {item["relative_path"] for item in sources}
+            remaining = [entry for entry in self._read_index()
+                         if entry["relative_path"] not in retired]
+            self._write_index(remaining + [entry])
         deleted: list[str] = []
         for item in sources:
             try:
@@ -413,7 +448,9 @@ class CheckpointTiering:
         keep = self.keep
         if keep <= 0:
             return {"status": "disabled", "merges": 0, "keep": 0, "dry_run": dry_run}
-        existing = len(self.entries()) + len(self.adopt(write=False))
+        # Counting is cheap (no content is read) so the check costs nothing on
+        # an instance that has already been migrated.
+        existing = len(self.entries()) + len(self.unregistered())
         if not state and existing <= keep * BACKLOG_FACTOR:
             return {"status": "not_needed", "checkpoints": existing, "merges": 0,
                     "threshold": keep * BACKLOG_FACTOR, "dry_run": dry_run}
@@ -451,13 +488,22 @@ class CheckpointTiering:
                 "last_error": (report.get("errors") or [None])[-1],
             },
         )
-        self.records.emit(
-            "checkpoint_tiering_completed" if complete else "checkpoint_tiering_skipped",
-            merges=report["merges"],
-            remaining_verbatim=verbatim,
-            keep=keep,
-            error=(report.get("errors") or [None])[-1],
-        )
+        if complete:
+            self.records.emit(
+                "checkpoint_tiering_completed",
+                merges=report["merges"],
+                remaining_verbatim=verbatim,
+                keep=keep,
+            )
+        elif report.get("errors"):
+            # An offline start or a failed request: the marker stays open, so
+            # the next start retries from where this one stopped.
+            self.records.emit(
+                "checkpoint_tiering_skipped",
+                merges=report["merges"],
+                remaining_verbatim=verbatim,
+                error=report["errors"][-1],
+            )
         return report
 
     def report(self) -> dict[str, Any]:
