@@ -356,11 +356,13 @@ class CheckpointTiering:
         dry_run: bool = False,
         limit: int = 0,
         adopt: bool = False,
+        stop: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """Merge until at most ``keep`` verbatim checkpoints remain.
 
-        ``limit`` stops after that many merges (0 is no limit); the next call
-        continues where this one stopped.
+        ``limit`` stops after that many merges (0 is no limit) and ``stop``
+        ends the pass between merges; the next call continues where this one
+        stopped. Every merge is atomic, so stopping is always safe.
         """
 
         keep = self.keep
@@ -382,6 +384,8 @@ class CheckpointTiering:
         targets: list[str] = []
         errors: list[str] = []
         while len(verbatim) > keep or len(merged) > 1:
+            if stop is not None and stop():
+                break
             batch = verbatim[: max(0, min(len(verbatim) - keep, MERGE_BATCH))]
             sources = batch + merged
             if not sources:
@@ -432,7 +436,13 @@ class CheckpointTiering:
 
     # -- the one-time backlog pass -------------------------------------
 
-    def backlog(self, *, dry_run: bool = False, limit: int = 0) -> dict[str, Any]:
+    def backlog(
+        self,
+        *,
+        dry_run: bool = False,
+        limit: int = 0,
+        stop: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         """Migrate a pre-existing backlog of checkpoints, once.
 
         The marker is written only when the backlog is fully reduced, so an
@@ -467,7 +477,7 @@ class CheckpointTiering:
                 threshold=keep * BACKLOG_FACTOR,
                 resumed=bool(state),
             )
-        report = self.tier(dry_run=dry_run, limit=limit, adopt=True)
+        report = self.tier(dry_run=dry_run, limit=limit, adopt=True, stop=stop)
         report["backlog"] = True
         report["checkpoints_at_start"] = state.get("checkpoints_at_start") or existing
         if dry_run:

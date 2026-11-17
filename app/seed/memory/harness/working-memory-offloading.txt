@@ -47,6 +47,19 @@ Procedure
 8. Include an "Objective progress" line: what changed about the actual
    objective since the previous checkpoint. "Nothing; supporting work only" is
    an honest and useful answer: it makes drift visible.
+9. During long multi-hour tasks, save a short progress checkpoint with
+   `save_memory` every so often: facts established, hypotheses refuted, next
+   step, measure. Those memories outlive the context and inform later
+   summaries.
+
+Tiering
+
+The newest checkpoints stay verbatim; older ones in `memory/context/` are
+merged into one older-tier checkpoint whose summary replaces them, so the
+directory does not grow without bound. The raw archives in `logs/context/`
+keep the detail. When a merge happens you are told which paths no longer
+exist; point indexes and meta-memory routes that named them at the merged
+file.
 
 Example
 

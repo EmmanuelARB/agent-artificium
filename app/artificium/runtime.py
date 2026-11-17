@@ -2360,7 +2360,9 @@ class Artificium:
         """The one-time, resumable migration of a pre-existing backlog."""
 
         try:
-            report = self.checkpoints.backlog(limit=BACKLOG_MERGES_PER_RUN)
+            report = self.checkpoints.backlog(
+                limit=BACKLOG_MERGES_PER_RUN, stop=lambda: self._stop
+            )
         except Exception as exc:
             self.records.emit(
                 "checkpoint_tiering_skipped", error=f"{type(exc).__name__}: {exc}"

@@ -282,6 +282,20 @@ class BacklogTests(TieringCase):
         self.assertEqual(resumed["verbatim"], 3)
         self.assertTrue(read_json(self.paths.checkpoint_tiering_state)["completed_at"])
 
+    def test_a_stopped_pass_leaves_the_marker_open(self):
+        self.backlog_files(BACKLOG_SIZE)
+        checks = {"count": 0}
+
+        def stop():
+            checks["count"] += 1
+            return checks["count"] > 1
+
+        report = self.tiering.backlog(stop=stop)
+        self.assertEqual(report["merges"], 1)
+        state = read_json(self.paths.checkpoint_tiering_state)
+        self.assertIsNone(state["completed_at"])
+        self.assertGreater(len(self.tiering.entries()), 3)
+
     def test_adoption_uses_modification_time_not_the_name(self):
         older = self.paths.checkpoint_dir / "zzz-newest-name.txt"
         newer = self.paths.checkpoint_dir / "aaa-oldest-name.txt"
