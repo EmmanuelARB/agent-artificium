@@ -34,7 +34,7 @@ Artificium gives an agent full control over its own environment, lets it work in
 >
 > **Run it in an isolated environment.** Prefer a disposable cloud instance, a VM with no host filesystem access, or a properly sandboxed container. Do not run it directly on your personal or work computer, or expose host drives, your home directory, the Docker socket, an SSH agent, or personal credentials.
 >
-> **Prefer a local model.** For a paid API, use a dedicated key and set a hard spending cap with a provider that can enforce it for that key or its dedicated project/account. Artificium can read and use its own key directly; a limit written in its prompt or editable configuration cannot contain that spending. Budget alerts alone do not stop charges. Local inference still requires the same isolation.
+> **Prefer a local model.** For a paid API, use a dedicated key and set a hard spending cap with a provider that can enforce it for that key or its dedicated project/account. Artificium can read and use its own key directly; a limit written in its prompt or editable configuration cannot contain that spending. Budget alerts alone do not stop charges. Artificium's own [spend limits](#cost-and-the-spend-limits) are estimates the agent's account can edit, so they complement a provider-side cap and do not replace it. Local inference still requires the same isolation.
 
 **Requirements:** Linux, Python 3.11+, and a local or remote model API. The runtime uses only the Python standard library; no `pip install` is needed.
 
@@ -78,6 +78,16 @@ A fresh setup uses these recommended defaults, all changeable later:
 | Model request timeout | 1,800 seconds |
 
 An existing `config.json` keeps the values it already has.
+
+**Spend limits (optional).** Setup asks for no prices and sets no limit. To cap spend per rolling 5 hours, day, week or month, enter your model's prices per million tokens, then set the limits:
+
+```bash
+python3 artificium.py configure model --price-input 3 --price-cached-input 0.3 --price-output 15
+python3 artificium.py configure oversight --price-input 15 --price-output 75      # only if you set up an oversight connection
+python3 artificium.py configure harness --daily-cost-limit 20
+```
+
+Artificium multiplies each request's token counts by those prices, so the total is an estimate from the rates you entered, not a figure from your provider's billing. Only OpenRouter and OpenCode Go report the amount charged, so they need no prices. A limit is refused until every connection it covers has prices (`0` for a free local model). Leave the cache prices out and cached tokens count at the input price, which overstates the cost. Details are in [Cost and the spend limits](#cost-and-the-spend-limits).
 
 ### Run
 
