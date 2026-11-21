@@ -89,7 +89,7 @@ def _setup_options(args: argparse.Namespace) -> SetupOptions:
     options.decision_review = None if review is None else review == "on"
     options.oversight_tool_rounds = getattr(args, "oversight_tool_rounds", None)
     for name in ("price_input", "price_cached_input", "price_cache_write", "price_output",
-                 "price_currency", "daily_cost_limit", "cost_day_timezone"):
+                 "price_currency", *cost_module.LIMIT_FIELDS, "cost_day_timezone"):
         setattr(options, name, getattr(args, name, None))
     return options
 
@@ -181,7 +181,7 @@ def _has_reconfigure_values(args: argparse.Namespace) -> bool:
             "working_memory_tokens",
             "auto_repair", "decision_review", "oversight_tool_rounds",
             "price_input", "price_cached_input", "price_cache_write", "price_output",
-            "price_currency", "daily_cost_limit", "cost_day_timezone",
+            "price_currency", *cost_module.LIMIT_FIELDS, "cost_day_timezone",
         )
     ) or getattr(args, "off", False) or getattr(args, "check", False) or bool(
         getattr(args, "reset_generation_settings", False)
@@ -197,7 +197,7 @@ def _reconfigure(paths: Paths, args: argparse.Namespace) -> None:
         print("What would you like to configure?\n")
         print("1. Model connection and harness settings")
         print("2. Oversight connection (a second model for periodic checks, request_review and consult)")
-        print("3. Prices and the daily cost limit")
+        print("3. Prices and the cost limits")
         chosen = input("\nChoose [1]: ").strip()
         if chosen == "2":
             options.scope = "oversight"
@@ -244,15 +244,23 @@ def _price_text(config) -> str:
 
 
 def cost_summary(config) -> str:
-    """Prices of each connection and the daily limit, for the configure output."""
+    """Prices of each connection and the spend limits, for the configure output."""
     lines = [f"Prices, worker: {_price_text(config)}"]
     separate = config.oversight_config()
     if separate is not None:
         lines.append(f"Prices, oversight: {_price_text(separate)}")
-    limit = config.daily_cost_limit
     zone = config.cost_day_timezone or "this machine's zone"
-    lines.append("Daily cost limit: " + ("none" if limit is None else
-                 f"{limit:g} {cost_module.limit_currency(config)}, days end at midnight ({zone})"))
+    currency = cost_module.limit_currency(config)
+    limits = cost_module.configured_limits(config)
+    if all(value is None for value in limits.values()):
+        lines.append("Cost limits: none")
+    for item in cost_module.LIMIT_PERIODS:
+        value = limits[item.key]
+        if value is None:
+            continue
+        window = ("any rolling 5 hours" if item.key == "5h"
+                  else f"periods end at midnight ({zone})")
+        lines.append(f"{item.adjective.capitalize()} cost limit: {value:g} {currency}, {window}")
     return "\n".join(lines)
 
 

@@ -357,7 +357,8 @@ class CliTests(unittest.TestCase):
             "EUR", "3", "0.3", "unset", "15",
             # oversight: currency, input, cached input, cache write, output
             "EUR", "1", "unset", "unset", "5",
-            "20", "Europe/Paris", "y",
+            # limits: five-hour, daily, weekly, monthly; then the zone and the confirmation
+            "off", "20", "off", "off", "Europe/Paris", "y",
         ])
         with mock.patch("builtins.input", side_effect=lambda *_: next(answers)), \
                 contextlib.redirect_stdout(io.StringIO()):
@@ -429,7 +430,7 @@ class CliTests(unittest.TestCase):
                  "runtime": {"status": "cost_limited", "reset_at": "2026-03-11 00:00",
                              "timezone": "UTC"}}
         text = format_status(state)
-        self.assertIn("held by the daily cost limit", text)
+        self.assertIn("held by a cost limit", text)
         self.assertIn("Held until 2026-03-11 00:00 (UTC)", text)
 
 

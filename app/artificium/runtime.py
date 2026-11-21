@@ -213,7 +213,8 @@ class Artificium:
         if problem:
             # A hand-edited file: configure refuses to save such a limit.
             self.records.emit("cost_limit_unenforceable", reason=problem)
-            self.console.error(f"daily cost limit cannot be enforced: {problem}")
+            self.console.error(f"cost limits cannot be enforced: {problem}")
+        self._note_cost_limits()
         # A start that reaches this point has imported and wired the whole
         # harness, overlay included, so the failed-start counter can reset.
         _bootstrap.clear_attempts(self.paths.root)
@@ -1062,10 +1063,51 @@ class Artificium:
         status = self.cost.status()
         if status["limited"]:
             raise CostLimitReached(
-                f"daily cost limit reached ({money(status['spent'])} of {money(status['limit'])} "
-                f"{status['currency']}); no request was sent. Requests resume at "
+                f"{self._limit_text(status)}; no request was sent. Requests resume at "
                 f"{status['reset_at']} ({status['timezone']}).",
                 reset_epoch=status["reset_epoch"])
+
+    @staticmethod
+    def _limit_text(status: dict[str, Any]) -> str:
+        """Which limit holds requests back (an older cost overlay knows only the day)."""
+        describe = getattr(_cost_module, "limit_reached_text", None)
+        if describe is not None and "periods" in status:
+            return describe(status)
+        return (f"daily cost limit reached ({money(status['spent'])} of "
+                f"{money(status['limit'])} {status['currency']})")
+
+    def _note_cost_limits(self) -> None:
+        """Record the limits in force at start, and say when one was raised or removed.
+
+        The limits are read once, when the process starts, so a change takes
+        effect only at a restart. Noting them here makes a raised or removed
+        limit visible in the log and on the console instead of silent.
+        """
+        limits = getattr(_cost_module, "configured_limits", None)
+        note = getattr(self.cost, "note_limits", None)
+        if limits is None or note is None:
+            return
+        try:
+            current = limits(self.config)
+            previous = note(current)
+            self.records.emit("cost_limits_in_force", limits=current,
+                              timezone=getattr(self.config, "cost_day_timezone", None),
+                              currency=_cost_module.limit_currency(self.config))
+            if previous is None:
+                return
+            loosened = {name: {"before": previous.get(name), "after": value}
+                        for name, value in current.items()
+                        if previous.get(name) is not None
+                        and (value is None or value > previous[name])}
+            if loosened:
+                self.records.emit("cost_limits_loosened", changes=loosened)
+                self.records.life("cost_limits_loosened", changes=loosened)
+                self.console.line("cost", "cost limits loosened since the last start: "
+                                  + ", ".join(f"{name} {change['before']:g} -> "
+                                              f"{'none' if change['after'] is None else format(change['after'], 'g')}"
+                                              for name, change in loosened.items()))
+        except Exception as exc:
+            self.records.emit("cost_ledger_failed", error=f"{type(exc).__name__}: {exc}")
 
     def _cost_limited(self) -> bool:
         try:
@@ -1074,24 +1116,39 @@ class Artificium:
             return False
 
     def _cost_events(self) -> list[str]:
-        """The one notice per day at WARN_FRACTION of the limit."""
+        """One notice per period, once, at WARN_FRACTION of its limit."""
         status = self.cost.status()
         if not status["warn_due"]:
             return []
-        self.cost.mark_warned()
-        self.records.emit("cost_warning_issued", spent=status["spent"], limit=status["limit"],
-                          currency=status["currency"], reset_at=status["reset_at"])
-        return [self.prompts.event(
-            "cost_limit_near",
-            percent=f"{status['fraction'] * 100:.0f}",
-            spent=money(status["spent"]), limit=money(status["limit"]),
-            remaining=money(status["limit"] - status["spent"]),
-            currency=status["currency"], reset_at=status["reset_at"],
-            timezone=status["timezone"])]
+        due = [item for item in status.get("periods", []) if item["warn_due"]]
+        if not due:
+            # An older cost overlay reports the day only.
+            due = [{"period": "day", "phrase": "today", "adjective": "daily", "rolling": False,
+                    "spent": status["spent"], "limit": status["limit"],
+                    "fraction": status["fraction"], "reset_at": status["reset_at"]}]
+        self.cost.mark_warned([item["period"] for item in due])
+        notices = []
+        for item in due:
+            self.records.emit("cost_warning_issued", period=item["period"], spent=item["spent"],
+                              limit=item["limit"], currency=status["currency"],
+                              reset_at=item["reset_at"])
+            until = getattr(_cost_module, "until_text", None)
+            notices.append(self.prompts.event(
+                "cost_limit_near",
+                period_title=item["adjective"].upper(), period_phrase=item["phrase"],
+                percent=f"{item['fraction'] * 100:.0f}",
+                spent=money(item["spent"]), limit=money(item["limit"]),
+                remaining=money(item["limit"] - item["spent"]),
+                currency=status["currency"], reset_at=item["reset_at"],
+                timezone=status["timezone"],
+                until_text=(until(item, status["timezone"]) if until and "rolling" in item
+                            else f"until {item['reset_at']} ({status['timezone']})")))
+        return notices
 
     def _start_cost_pause(self) -> None:
-        """Sleep until the day resets: the sleep mechanism, with a reason that
-        incoming messages and notifications do not end (they stay queued)."""
+        """Sleep until the limited periods reset: the sleep mechanism, with a
+        reason that incoming messages and notifications do not end (they stay
+        queued). With several periods at their limit, the latest reset counts."""
         status = self.cost.status()
         wake_at = float(status["reset_epoch"])
         now = self.cost.clock()
@@ -1101,14 +1158,16 @@ class Artificium:
         })
         detail = {"spent": status["spent"], "limit": status["limit"],
                   "currency": status["currency"], "reset_at": status["reset_at"],
-                  "reset_epoch": wake_at, "timezone": status["timezone"]}
+                  "reset_epoch": wake_at, "timezone": status["timezone"],
+                  "period": status.get("period", "day"),
+                  "period_label": status.get("adjective", "daily"),
+                  "limited_periods": status.get("limited_periods", ["day"])}
         self._write_state("cost_limited", **detail)
         self.records.emit("cost_limit_reached", **detail)
         self.records.life("cost_limit_reached", **detail)
         self.console.line(
             "cost",
-            f"daily limit reached ({money(status['spent'])} of {money(status['limit'])} "
-            f"{status['currency']}); model requests are held until {status['reset_at']} "
+            f"{self._limit_text(status)}; model requests are held until {status['reset_at']} "
             f"({status['timezone']}); incoming messages stay queued")
 
     def _review(self, messages: list[dict[str, Any]]) -> tuple[str, str]:

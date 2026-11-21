@@ -498,7 +498,7 @@ def _chat_repl(
                     print("Model requests paused: " + str(runtime.get("error", "")))
                     print("Correct the problem, then run: python3 artificium.py restart")
                 if alive and runtime.get("status") == "cost_limited":
-                    print(f"Model requests are held by the daily cost limit until "
+                    print(f"Model requests are held by a cost limit until "
                           f"{runtime.get('reset_at')}; your messages wait and are handled after that.")
                 waiting = len(open_decisions(client.events(interaction_id)))
                 if waiting:

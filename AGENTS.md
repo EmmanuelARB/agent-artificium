@@ -98,20 +98,31 @@ writes). Never commit them, and never read or print `.secrets.json`.
   when a section exists, and records `oversight_connection_failed`. Every
   `model_request`/`model_response` record carries `connection` (`worker` or
   `oversight`). Setup reuses `SetupWizard._build` with `scope="oversight"`.
-- **Cost and the daily limit.** Prices are model-section fields
+- **Cost and the spend limits.** Prices are model-section fields
   (`config.PRICE_FIELDS`, `price_currency`), so the worker and the oversight
-  section each carry their own; `daily_cost_limit` and `cost_day_timezone` are
-  harness fields. `Artificium._account_usage` prices each reply (provider
-  cost, then computed, else unknown) into `logs/runtime/cost-ledger.json`;
-  nothing scans a log. At the limit `_complete` raises `CostLimitReached`
-  before anything is sent (a backstop for oversight, review and consult),
-  `run_turn` ends the turn before claiming anything, and `run_forever` starts
-  a sleep with reason `cost_limit` that `_sleep_active` ends at the reset
-  (messages do not end it) and that skips `Oversight.tick`. Prices and the
-  limit are configured offline (`SetupWizard._reconfigure_costs`) and a limit
-  that cannot be enforced is refused (`cost.cost_limit_problem`). The state
-  header's `{{cost_line}}` is an optional placeholder (`prompts.OPTIONAL_VALUES`)
-  so an older runtime overlay keeps rendering.
+  section each carry their own; the four limits (`cost.LIMIT_PERIODS`:
+  `five_hour_cost_limit`, `daily_cost_limit`, `weekly_cost_limit`,
+  `monthly_cost_limit`) and `cost_day_timezone` are harness fields.
+  `Artificium._account_usage` prices each reply (provider cost, then computed,
+  else unknown) into `logs/runtime/cost-ledger.json`; nothing scans a log. The
+  day, week and month are derived from the per-day records; the five-hour
+  window is rolling, so the ledger also keeps `recent` (time and cost of the
+  last five hours' requests). `CostLedger.status()` reports every period under
+  `periods`; its top-level figures are those of the period that decides the
+  next pause, and `limited` holds when any period is. At a limit `_complete`
+  raises `CostLimitReached` before anything is sent (a backstop for oversight,
+  review and consult), `run_turn` ends the turn before claiming anything, and
+  `run_forever` starts a sleep with reason `cost_limit` that `_sleep_active`
+  ends when the limited periods free up, the latest of them (messages do not
+  end it), and that skips `Oversight.tick`. Limits are read once at start;
+  `_note_cost_limits` records them (`cost_limits_in_force`) and flags a raised
+  or removed one (`cost_limits_loosened`). Prices and the limits are configured
+  offline (`SetupWizard._reconfigure_costs`) and a limit that cannot be
+  enforced is refused (`cost.cost_limit_problem`). The state header's
+  `{{cost_line}}` is an optional placeholder (`prompts.OPTIONAL_VALUES`) so an
+  older runtime overlay keeps rendering. A new period needs a `Period` entry, a
+  config field (validated in `Config.__post_init__`), and nothing else: the
+  CLI flags, the setup menu and the report loop over `LIMIT_PERIODS`.
 - **Tiered checkpoints.** Every offload writes one checkpoint below
   `mind/memory/context/`; `logs/runtime/checkpoints.json` records which files
   those are (paths relative to the workspace). The newest

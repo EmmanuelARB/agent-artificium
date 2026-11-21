@@ -470,7 +470,7 @@ class ReviewToolsMixin:
     # -- decision review ---------------------------------------------------
 
     _REVIEW_SKIPS = {
-        "cost_limit": "the daily cost limit is reached",
+        "cost_limit": "a cost limit is reached",
         "connection_failed": "the oversight model could not be reached",
         "unparseable": "its answer had no clear verdict",
         "unavailable": "this context has no oversight engine",

@@ -678,9 +678,17 @@ def render_sleep_started(record, options, session=None):
 
 
 def render_cost_limit_reached(record, options, session=None):
-    return [f"[cost] daily limit reached ({record.get('spent')} of {record.get('limit')} "
+    label = record.get("period_label") or "daily"
+    return [f"[cost] {label} limit reached ({record.get('spent')} of {record.get('limit')} "
             f"{record.get('currency') or ''}); model requests are held until "
             f"{record.get('reset_at')} ({record.get('timezone')}); messages stay queued"]
+
+
+def render_cost_limits_loosened(record, options, session=None):
+    changes = record.get("changes") or {}
+    text = ", ".join(f"{name} {item.get('before')} -> {item.get('after') if item.get('after') is not None else 'none'}"
+                     for name, item in changes.items() if isinstance(item, dict))
+    return [f"[cost] limits loosened since the last start: {text}"]
 
 
 def render_decision_requested(record, options, session=None):
@@ -765,6 +773,7 @@ _RENDERERS: dict[str, Callable[[dict, RenderOptions, "WatchSession | None"], lis
     events.KIND_SLEEP_STARTED: render_sleep_started,
     events.KIND_SLEEP_ENDED: render_sleep_ended,
     events.KIND_COST_LIMIT_REACHED: render_cost_limit_reached,
+    events.KIND_COST_LIMITS_LOOSENED: render_cost_limits_loosened,
     events.KIND_DECISION_REQUESTED: render_decision_requested,
     events.KIND_DECISION_REVIEW_COMPLETED: render_decision_review_completed,
     events.KIND_DECISION_REVIEW_SKIPPED: render_decision_review_skipped,

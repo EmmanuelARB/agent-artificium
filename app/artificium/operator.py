@@ -117,14 +117,25 @@ def _oversight_line(oversight: dict[str, Any] | None) -> str:
 
 
 def _cost_lines(cost: dict[str, Any] | None) -> list[str]:
-    """Today's spend; nothing when there is no limit and no cost to show."""
+    """Spend against each limit; nothing when there is no limit and no cost to show."""
     if not cost or (cost["limit"] is None and not cost["requests"]):
         return []
-    line = f"Spend today: {money(cost['spent'])}"
-    if cost["limit"] is not None:
-        line += f" of {money(cost['limit'])} {cost['currency']} ({cost['fraction'] * 100:.0f}%); resets {cost['reset_at']} ({cost['timezone']})"
+    limited = [item for item in cost.get("periods") or [] if item["limit"] is not None]
+    if len(limited) > 1 or (limited and limited[0]["period"] != "day"):
+        parts = []
+        for item in limited:
+            part = (f"{item['short']} {money(item['spent'])} of {money(item['limit'])} "
+                    f"({item['fraction'] * 100:.0f}%)")
+            if item["limited"]:
+                part += f" REACHED, held until {item['reset_at']}"
+            parts.append(part)
+        line = f"Spend vs limits ({cost['currency']}): " + "; ".join(parts)
     else:
-        line += f" {cost['currency']}"
+        line = f"Spend today: {money(cost['spent'])}"
+        if cost["limit"] is not None:
+            line += f" of {money(cost['limit'])} {cost['currency']} ({cost['fraction'] * 100:.0f}%); resets {cost['reset_at']} ({cost['timezone']})"
+        else:
+            line += f" {cost['currency']}"
     if cost["unknown_cost_requests"]:
         line += f"; {cost['unknown_cost_requests']} requests of unknown cost"
     return [line + "; details: python3 artificium.py cost"]
@@ -138,7 +149,7 @@ def format_status(state: dict[str, Any]) -> str:
     if running and runtime.get("status") == "blocked":
         label = "running; model requests paused"
     if running and runtime.get("status") == "cost_limited":
-        label = "running; model requests held by the daily cost limit"
+        label = "running; model requests held by a cost limit"
     if not state["configured"]:
         label = "not configured"
     lines = [f"Artificium: {label}", f"Workspace: {state['root']}"]

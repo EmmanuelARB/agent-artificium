@@ -36,7 +36,7 @@ NEW_SETUP_DEFAULTS = getattr(_config, "NEW_SETUP_DEFAULTS", {
     "max_tool_output_chars": 20_000,
 })
 NATIVE_TOOL_ADAPTERS = getattr(_config, "NATIVE_TOOL_ADAPTERS", frozenset())
-from .cost import PRICE_FIELDS, cost_limit_problem
+from .cost import LIMIT_FIELDS, LIMIT_PERIODS, PRICE_FIELDS, cost_limit_problem
 from .engine import DEFAULT_USER_AGENT, EngineError, make_engine
 from .engine_stream import _STREAMING_ADAPTERS
 from .discovery import (ModelDiscovery, discover_models, discover_provider_models,
@@ -116,7 +116,10 @@ class SetupOptions:
     price_cache_write: float | str | None = None
     price_output: float | str | None = None
     price_currency: str | None = None
+    five_hour_cost_limit: float | str | None = None
     daily_cost_limit: float | str | None = None
+    weekly_cost_limit: float | str | None = None
+    monthly_cost_limit: float | str | None = None
     cost_day_timezone: str | None = None
     force: bool = False
 
@@ -153,7 +156,7 @@ def _number(prompt: str, default: object, *, minimum: float = 0,
 
 
 COST_PRICE_OPTIONS = (*PRICE_FIELDS, "price_currency")
-COST_HARNESS_OPTIONS = ("daily_cost_limit", "cost_day_timezone")
+COST_HARNESS_OPTIONS = (*LIMIT_FIELDS, "cost_day_timezone")
 
 
 def _clearable(value: object) -> object:
@@ -168,7 +171,7 @@ def price_values(options: SetupOptions) -> dict[str, object]:
 
 
 def cost_harness_values(options: SetupOptions) -> dict[str, object]:
-    """The daily limit and day-boundary zone the options ask to change."""
+    """The spend limits and day-boundary zone the options ask to change."""
     return {name: _clearable(getattr(options, name)) for name in COST_HARNESS_OPTIONS
             if getattr(options, name, None) is not None}
 
@@ -756,7 +759,7 @@ class SetupWizard:
     @staticmethod
     def _validate_scope(options: SetupOptions) -> None:
         if options.scope in {"model", "oversight"} and cost_harness_values(options):
-            raise ValueError("The daily limit and its time zone apply to both connections: use configure harness")
+            raise ValueError("The spend limits and their time zone apply to both connections: use configure harness")
         if options.scope == "harness" and price_values(options):
             raise ValueError("Prices belong to a connection: use configure model or configure oversight")
         if options.scope == "oversight":
@@ -1022,7 +1025,7 @@ class SetupWizard:
 
     @staticmethod
     def _guard_limit(config: Config) -> None:
-        """Refuse a daily limit that could not be enforced (before any write)."""
+        """Refuse a spend limit that could not be enforced (before any write)."""
         problem = cost_limit_problem(config)
         if problem:
             raise ValueError(problem)
@@ -1230,21 +1233,27 @@ class SetupWizard:
                                ("price_cache_write", "Cache write"), ("price_output", "Output (reasoning included)")):
                 target[name] = self._price_prompt(text, getattr(source, name))
         harness: dict[str, object] = {}
-        shown = "off" if current.daily_cost_limit is None else f"{current.daily_cost_limit:g}"
-        while True:
-            raw = _ask("\nDaily spend limit for both connections together, or off", shown).strip().lower()
-            if raw in {"off", "none"}:
-                harness["daily_cost_limit"] = None
-                break
-            try:
-                if float(raw.replace(",", "")) > 0:
-                    harness["daily_cost_limit"] = float(raw.replace(",", ""))
+        print("\nSpend limits cover both connections together; enter an amount, or off.")
+        for item in LIMIT_PERIODS:
+            current_value = getattr(current, item.field)
+            shown = "off" if current_value is None else f"{current_value:g}"
+            span = ("any rolling 5 hours" if item.key == "5h" else
+                    {"day": "per day", "week": "per week (from Monday)",
+                     "month": "per calendar month"}[item.key])
+            while True:
+                raw = _ask(f"{item.adjective.capitalize()} spend limit, {span}, or off", shown).strip().lower()
+                if raw in {"off", "none"}:
+                    harness[item.field] = None
                     break
-            except ValueError:
-                pass
-            print("Enter a positive amount, or off.")
+                try:
+                    if float(raw.replace(",", "")) > 0:
+                        harness[item.field] = float(raw.replace(",", ""))
+                        break
+                except ValueError:
+                    pass
+                print("Enter a positive amount, or off.")
         harness["cost_day_timezone"] = _clearable(_ask(
-            "Time zone whose midnight ends the day (an IANA name such as Europe/Paris, or local)",
+            "Time zone whose midnight ends the day, week and month (an IANA name such as Europe/Paris, or local)",
             current.cost_day_timezone or "local"))
         return worker, oversight, harness
 
@@ -1254,7 +1263,8 @@ class SetupWizard:
         if options.scope == "cost":
             if not interactive:
                 raise ValueError("configure the costs with --price-* flags on configure model, "
-                                 "configure oversight and --daily-cost-limit on configure harness")
+                                 "configure oversight and --daily-cost-limit (or --five-hour-, "
+                                 "--weekly-, --monthly-cost-limit) on configure harness")
             worker, oversight, harness = self._edit_costs(current)
         else:
             prices = price_values(options)

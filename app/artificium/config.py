@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from . import _bootstrap
-from .cost import PRICE_FIELDS, check_currency, check_limit, check_price, check_timezone
+from .cost import LIMIT_FIELDS, PRICE_FIELDS, check_currency, check_limit, check_price, check_timezone
 from .filesystem import Paths, atomic_write_json, read_json
 
 
@@ -331,10 +331,15 @@ class Config:
     price_cache_write: float | None = None
     price_output: float | None = None
     price_currency: str = "USD"
-    # Spend limit per local day over both connections together, in that
-    # currency; None means no limit. The day starts at local midnight in
-    # cost_day_timezone (an IANA name), or this machine's zone when None.
+    # Spend limits over both connections together, in that currency; None
+    # means no limit on that period. The day, the week (from Monday) and the
+    # month start at local midnight in cost_day_timezone (an IANA name), or
+    # this machine's zone when None. The five-hour limit is a rolling window.
+    # Enforced by the harness before every model request (see cost.py).
+    five_hour_cost_limit: float | None = None
     daily_cost_limit: float | None = None
+    weekly_cost_limit: float | None = None
+    monthly_cost_limit: float | None = None
     cost_day_timezone: str | None = None
 
     def __post_init__(self) -> None:
@@ -458,7 +463,8 @@ class Config:
             check_price(name, getattr(self, name))
         check_currency(self.price_currency)
         self.price_currency = self.price_currency.strip()
-        check_limit(self.daily_cost_limit)
+        for limit_name in LIMIT_FIELDS:
+            check_limit(getattr(self, limit_name), limit_name)
         check_timezone(self.cost_day_timezone)
         if self.engine_wait_notice_seconds <= 0:
             raise ValueError("engine_wait_notice_seconds must be positive")

@@ -184,8 +184,17 @@ def _cost_arguments(parser: argparse.ArgumentParser) -> None:
     ):
         group.add_argument(flag, type=_amount, metavar="AMOUNT|off", help=text + "; off clears it")
     group.add_argument("--price-currency", metavar="LABEL", help="Currency label for the prices (default: USD; no conversion)")
-    group.add_argument("--daily-cost-limit", type=_amount, metavar="AMOUNT|off", help="Spend limit per day over both connections, in the prices' currency; model requests stop until the day resets")
-    group.add_argument("--cost-day-timezone", metavar="ZONE|local", help="IANA time zone whose midnight ends the day (default: this machine's)")
+    for flag, text in (
+        ("--five-hour-cost-limit", "Spend limit over any rolling 5 hours"),
+        ("--daily-cost-limit", "Spend limit per day"),
+        ("--weekly-cost-limit", "Spend limit per week (from Monday)"),
+        ("--monthly-cost-limit", "Spend limit per calendar month"),
+    ):
+        group.add_argument(flag, type=_amount, metavar="AMOUNT|off",
+                           help=text + " over both connections, in the prices' currency; model requests "
+                           "stop until the period frees up. Several limits can be set; the harness "
+                           "enforces all of them")
+    group.add_argument("--cost-day-timezone", metavar="ZONE|local", help="IANA time zone whose midnight ends the day, week and month (default: this machine's)")
 
 
 def _configure_arguments(parser: argparse.ArgumentParser) -> None:
@@ -332,7 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     attention.add_argument("--output")
 
-    cost = commands.add_parser("cost", help="Spend per day and connection, the daily limit and its reset time")
+    cost = commands.add_parser("cost", help="Spend per day and connection, the spend limits and when they free up")
     cost.add_argument("--days", type=int, default=7, help="Days to show (default: 7)")
     cost.add_argument("--json", action="store_true", help="Machine-readable report")
     commands.add_parser("status", help="Read-only runtime summary").add_argument("--json", action="store_true", help="Machine-readable detailed state")
